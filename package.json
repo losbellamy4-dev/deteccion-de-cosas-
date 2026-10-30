@@ -1,0 +1,12 @@
+{
+  "name": "detectalo-todo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sistema web local de visión por computador y analítica de vídeo (100 % offline).",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/unit/*.test.js\"",
+    "serve": "python3 serve.py"
+  },
+  "license": "MIT"
+}

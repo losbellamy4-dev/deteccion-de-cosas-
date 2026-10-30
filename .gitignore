@@ -1,0 +1,17 @@
+# Librerías y modelos descargados con tools/descargar_dependencias.py (≈ 70 MB).
+# No se versionan por defecto; si quieres distribuir la carpeta lista para usar
+# sin conexión, elimina estas líneas (o usa Git LFS).
+lib/*
+!lib/README.md
+models/*
+!models/README.md
+
+# Descargas a medias del script
+*.part
+
+# Varios
+node_modules/
+__pycache__/
+.DS_Store
+Thumbs.db
+*.log
