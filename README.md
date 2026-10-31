@@ -2,7 +2,7 @@
 
 Sistema web de **visión por computador y analítica de vídeo que funciona 100 % en local**: pose corporal multipersona, manos con gestos, malla facial 3D, objetos COCO con **filtro anti-fantasmas**, **reconocimiento de 1000 tipos de cosas** (animales y razas, comida, herramientas, instrumentos, vehículos, ropa, aparatos…) y movimiento, con *tracking*, alertas (caída, inmovilidad, intrusión, somnolencia…), zonas, líneas de cruce y exportación del registro. Una vez abierto **no hace ni una sola petición de red**: puedes desconectar el equipo.
 
-**Versión web:** {{VERCEL_URL}} (la misma app, servida por Vercel; los fotogramas se procesan en tu navegador y nunca se envían a ningún servidor).
+**Versión web:** el repositorio está listo para publicarse en Vercel tal cual (`vercel.json` incluido, sin paso de compilación). Los fotogramas se procesan en el navegador y nunca se envían a ningún servidor.
 
 > **Aviso importante.** Las heurísticas (caída, inmovilidad, somnolencia, actividad, gestos, sonrisa, mirada) son **aproximadas**. No son aptas para uso médico, de teleasistencia, de conducción ni de seguridad crítica: tendrán falsos positivos y falsos negativos.
 
