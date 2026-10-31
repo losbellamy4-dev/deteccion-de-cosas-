@@ -164,6 +164,15 @@
     table.models td { padding: 4px; border-bottom: 1px solid rgba(27,41,57,.6); vertical-align: top; }
     table.models td.num { text-align: right; color: var(--cyan); }
     table.models tr.off td { color: var(--dim); }
+    .recog-block { display: grid; gap: 4px; }
+    .recog-h { color: var(--muted); font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .1em; }
+    .recog-top { font: 700 16px/1.25 var(--mono); color: #ede9fe; }
+    .recog-top.wait { font-size: 12px; font-weight: 600; color: var(--muted); }
+    .rbar { display: grid; grid-template-columns: 1fr 42px; gap: 6px; align-items: center; font: 11.5px var(--mono); }
+    .rbar .lbl { position: relative; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 2px 6px; border-radius: 4px; background: #0d1622; }
+    .rbar .lbl i { position: absolute; inset: 0 auto 0 0; background: rgba(167,139,250,.3); }
+    .rbar .lbl span { position: relative; }
+    .rbar b { text-align: right; color: var(--violet); font-weight: 600; }
     .entity { border: 1px solid var(--line); border-left: 3px solid var(--cyan); border-radius: 6px; padding: 6px 8px; background: var(--panel2); font: 11.5px var(--mono); display: grid; gap: 2px; }
     .entity .t { font-weight: 700; color: var(--text); }
     .entity .k { color: var(--muted); }
@@ -272,8 +281,14 @@
 
     <aside class="panel panel-left" aria-label="Capas y ajustes">
       <details class="sec" open>
-        <summary>Capas · módulos A–E</summary>
+        <summary>Capas · módulos A–F</summary>
         <div class="sec-body" id="modules"></div>
+      </details>
+      <details class="sec" open>
+        <summary>Precisión · anti-fantasmas</summary>
+        <div class="sec-body" id="precision">
+          <p class="hint" id="filter-info">Evita objetos y personas inventados por los modelos.</p>
+        </div>
       </details>
       <details class="sec" open>
         <summary>Inteligencia derivada</summary>
@@ -376,6 +391,10 @@
     </main>
 
     <aside class="panel panel-right" aria-label="Analítica en vivo">
+      <details class="sec" open>
+        <summary>Escáner · 1000 cosas</summary>
+        <div class="sec-body" id="recog"><p class="hint">Apunta la cámara a una cosa: el visor central del vídeo dice qué es (animales y razas, comida, herramientas, instrumentos, vehículos, ropa, aparatos…).</p></div>
+      </details>
       <details class="sec" open>
         <summary>Contadores en vivo</summary>
         <div class="sec-body">

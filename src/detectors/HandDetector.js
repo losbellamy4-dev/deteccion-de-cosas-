@@ -27,8 +27,10 @@ export class HandDetector extends Detector {
       baseOptions: { modelAssetBuffer: model },
       runningMode: 'VIDEO',
       numHands,
-      minHandDetectionConfidence: 0.5,
-      minHandPresenceConfidence: 0.5,
+      // 0,6 en vez de 0,5 (valor por defecto): menos manos "fantasma" sobre
+      // caras o fondos con textura, sin perder manos reales bien visibles.
+      minHandDetectionConfidence: 0.6,
+      minHandPresenceConfidence: 0.6,
       minTrackingConfidence: 0.5,
     }, delegates);
     this.task = task;

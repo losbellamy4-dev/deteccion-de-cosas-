@@ -1,9 +1,23 @@
 /**
  * PoseDetector.js — Módulo A: pose corporal multipersona (MediaPipe Pose
  * Landmarker, 33 keypoints con visibilidad + coordenadas 3D "world" en metros).
+ *
+ * Filtro anti-fantasma (`ghostFilter`): MediaPipe a veces "ve" un esqueleto
+ * en una cortina, un abrigo colgado o una textura. Esos esqueletos tienen
+ * pocos puntos fiables y ningún tronco coherente, así que sólo se aceptan
+ * personas con ≥ 6 puntos de visibilidad ≥ 0,6, al menos un hombro y la
+ * nariz o una cadera, y una caja no diminuta.
  */
 import { Detector } from './Detector.js';
 import { bboxOf } from '../analytics/geometry.js';
+
+export function plausiblePerson(lm, bbox) {
+  const good = (i) => (lm[i].visibility ?? 1) >= 0.6;
+  let n = 0;
+  for (let i = 0; i < lm.length; i++) if (good(i)) n++;
+  const torso = (good(11) || good(12)) && (good(0) || good(23) || good(24));
+  return n >= 6 && torso && bbox.w * bbox.h >= 0.002;
+}
 
 export class PoseDetector extends Detector {
   constructor(runtime) {
@@ -13,6 +27,7 @@ export class PoseDetector extends Detector {
     this.connections = [];
     this.options = { numPoses: 3 };
     this.variant = 'lite';
+    this.ghostFilter = true;
   }
 
   /**
@@ -29,8 +44,8 @@ export class PoseDetector extends Detector {
       baseOptions: { modelAssetBuffer: model },
       runningMode: 'VIDEO',
       numPoses,
-      minPoseDetectionConfidence: 0.5,
-      minPosePresenceConfidence: 0.5,
+      minPoseDetectionConfidence: 0.6,
+      minPosePresenceConfidence: 0.6,
       minTrackingConfidence: 0.5,
       outputSegmentationMasks: false,
     }, delegates);
@@ -60,6 +75,7 @@ export class PoseDetector extends Detector {
       const vis = lm.filter((p) => p.visibility >= 0.3);
       const bbox = bboxOf(vis.length >= 4 ? vis : lm, 0.08);
       if (!bbox) continue;
+      if (this.ghostFilter && !plausiblePerson(lm, bbox)) continue;
       const score = vis.length / lm.length;
       persons.push({ landmarks: lm, world, bbox, score });
     }

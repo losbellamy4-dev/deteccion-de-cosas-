@@ -24,10 +24,17 @@
  *     envejecimiento de las no emparejadas y creación de pistas nuevas.
  *
  * Ciclo de vida: una pista nace "tentativa" (ID temporal negativo) y sólo
- * recibe un ID visible (#1, #2, …) cuando acumula `minHits` emparejamientos.
- * Esto filtra falsos positivos de un solo frame y mantiene la numeración
- * limpia. Una pista confirmada que deja de verse sigue "en reserva" durante
- * `maxAge` segundos (oclusión breve) antes de eliminarse.
+ * recibe un ID visible (#1, #2, …) cuando acumula `minHits` emparejamientos
+ * (o `fastConfirm.hits` si su confianza media es muy alta). Esto filtra
+ * falsos positivos de pocos frames ("objetos fantasma") y mantiene la
+ * numeración limpia. Una pista confirmada que deja de verse sigue "en
+ * reserva" durante `maxAge` segundos (oclusión breve) antes de eliminarse.
+ *
+ * Doble umbral (como ByteTrack): las detecciones marcadas `weak` (confianza
+ * por debajo del umbral del usuario pero no despreciable) se emparejan en una
+ * segunda pasada SÓLO con pistas ya confirmadas que no encontraron pareja
+ * fuerte. Sirven para no perder un objeto real cuando su confianza baja un
+ * momento, pero nunca crean pistas nuevas ni confirman tentativas.
  *
  * Todo el tiempo se mide en SEGUNDOS del eje temporal del análisis (tiempo
  * del medio en archivos, reloj de pared en directo), no en frames: así el
@@ -61,6 +68,8 @@ export class Tracker {
    * @param {boolean} [o.classAware=true] no emparejar clases distintas
    * @param {'foot'|'center'} [o.refPoint='center'] punto de referencia por defecto
    * @param {number} [o.historySeconds=6] duración del historial (estelas/cruces)
+   * @param {{hits:number, meanScore:number}|null} [o.fastConfirm] confirmación
+   *        anticipada si la confianza media de la pista es alta
    */
   constructor(o = {}) {
     this.kind = o.kind || 'object';
@@ -70,6 +79,7 @@ export class Tracker {
     this.maxAge = o.maxAge ?? 1.2;
     this.tentativeMaxAge = o.tentativeMaxAge ?? 0.4;
     this.minHits = o.minHits ?? 2;
+    this.fastConfirm = o.fastConfirm || null;
     this.classAware = o.classAware ?? true;
     this.refPoint = o.refPoint || 'center';
     this.historySeconds = o.historySeconds ?? 6;
@@ -86,16 +96,18 @@ export class Tracker {
   get confirmed() { return this.tracks.filter((t) => t.confirmed); }
 
   /**
-   * @param {Array<{bbox:{x,y,w,h}, cls?:string, label?:string, score?:number, ref?:{x,y}, data?:any}>} dets
+   * @param {Array<{bbox:{x,y,w,h}, cls?:string, label?:string, score?:number, ref?:{x,y}, data?:any, weak?:boolean}>} dets
    * @param {number} t instante del análisis en segundos
    * @returns {{tracks:object[], created:object[], removed:object[]}}
    *   `tracks`: pistas confirmadas vivas (con `seenNow` = vista en este frame);
    *   `created`: pistas que se acaban de confirmar; `removed`: confirmadas eliminadas.
    */
-  update(dets, t) {
+  update(allDets, t) {
     const created = [];
     const removed = [];
     const tracks = this.tracks;
+    const dets = allDets.filter((d) => !d.weak);
+    const weak = allDets.filter((d) => d.weak);
 
     // Intervalo medio entre actualizaciones → tiempos de vida efectivos.
     if (this._lastUpdate != null) {
@@ -133,9 +145,24 @@ export class Tracker {
       usedDet[j] = 1;
       this._applyDetection(tr, dets[j], t);
       tr.seenNow = true;
-      if (!tr.confirmed && tr.hits >= this.minHits) {
+      if (!tr.confirmed && this._shouldConfirm(tr)) {
         this._confirm(tr);
         created.push(tr);
+      }
+    }
+
+    // --- 4a') Segunda pasada: detecciones débiles ↔ confirmadas sin pareja ---
+    if (weak.length) {
+      const idx = [];
+      for (let i = 0; i < tracks.length; i++) if (assign[i] < 0 && tracks[i].confirmed) idx.push(i);
+      if (idx.length) {
+        const cost = idx.map((i) => weak.map((d) => this._cost(tracks[i], preds[i], d)));
+        hungarian(cost).forEach((j, k) => {
+          if (j < 0 || cost[k][j] >= FORBIDDEN) return;
+          const tr = tracks[idx[k]];
+          this._applyDetection(tr, weak[j], t);
+          tr.seenNow = true;
+        });
       }
     }
 
@@ -156,7 +183,7 @@ export class Tracker {
       if (usedDet[j]) continue;
       const tr = this._newTrack(dets[j], t);
       this.tracks.push(tr);
-      if (tr.hits >= this.minHits) {
+      if (this._shouldConfirm(tr)) {
         this._confirm(tr);
         created.push(tr);
       }
@@ -200,6 +227,7 @@ export class Tracker {
       vx: 0,
       vy: 0,
       score: d.score ?? 1,
+      scoreSum: d.score ?? 1,
       hits: 1,
       firstSeen: t,
       lastSeen: t,
@@ -212,6 +240,12 @@ export class Tracker {
     };
     tr.history.push({ t, x: tr.ref.x, y: tr.ref.y });
     return tr;
+  }
+
+  _shouldConfirm(tr) {
+    if (tr.hits >= this.minHits) return true;
+    const f = this.fastConfirm;
+    return !!f && tr.hits >= f.hits && tr.scoreSum / tr.hits >= f.meanScore;
   }
 
   _confirm(tr) {
@@ -235,10 +269,12 @@ export class Tracker {
     tr.bbox = { ...d.bbox };
     tr.center = c;
     tr.ref = this._refOf(d);
-    tr.score = d.score ?? tr.score;
+    // Confianza mostrada: media móvil (una detección débil puntual no la hunde).
+    const s = d.score ?? tr.score;
+    tr.score = tr.score + 0.35 * (s - tr.score);
     tr.label = d.label ?? tr.label;
     tr.data = d.data;
-    tr.hits += 1;
+    if (!d.weak) { tr.hits += 1; tr.scoreSum += s; }
     tr.lastSeen = t;
     // Historial del punto de referencia (estelas, tripwires).
     const h = tr.history;

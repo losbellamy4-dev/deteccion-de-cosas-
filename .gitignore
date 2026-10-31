@@ -1,10 +1,8 @@
-# Librerías y modelos descargados con tools/descargar_dependencias.py (≈ 70 MB).
-# No se versionan por defecto; si quieres distribuir la carpeta lista para usar
-# sin conexión, elimina estas líneas (o usa Git LFS).
-lib/*
-!lib/README.md
-models/*
-!models/README.md
+# Librerías y modelos: SE VERSIONAN para que el repositorio (y el despliegue
+# en Vercel) funcione tal cual, sin descargar nada. Sólo se excluye la
+# variante "heavy" del modelo de pose (29 MB, opcional); se descarga con:
+#   python tools/descargar_dependencias.py --pose-heavy
+models/pose/pose_landmarker_heavy.task
 
 # Descargas a medias del script
 *.part
@@ -15,6 +13,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
+.vercel/
+_dbg.png
 
-# HTML portable generado por tools/construir_portable.py (≈ 50 MB)
+# HTML portable generado por tools/construir_portable.py (≈ 36 MB): se
+# regenera con un comando y se entrega aparte (ver README).
 dist/

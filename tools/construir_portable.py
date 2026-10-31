@@ -34,22 +34,20 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# (ruta, tipo MIME) de lo que se incrusta. Se omiten las variantes opcionales
-# (pose full/heavy, MediaPipe sin SIMD): no son necesarias en navegadores actuales.
+# (ruta, tipo MIME) de lo que se incrusta. Se omiten las piezas opcionales
+# (pose full/heavy, MediaPipe sin SIMD, EfficientDet-Lite2 y el modelo
+# alternativo COCO-SSD con TensorFlow.js) para que el archivo pese menos: en
+# el HTML portable esas opciones aparecen como «no instalado».
 EMBED = [
     ("lib/mediapipe/vision_bundle.mjs", "text/javascript"),
     ("lib/mediapipe/wasm/vision_wasm_internal.js", "text/javascript"),
     ("lib/mediapipe/wasm/vision_wasm_internal.wasm", "application/wasm"),
-    ("lib/tfjs/tf.min.js", "text/javascript"),
-    ("lib/tfjs/tf-backend-webgpu.min.js", "text/javascript"),
-    ("lib/tfjs/tf-backend-wasm.min.js", "text/javascript"),
-    ("lib/tfjs/tfjs-backend-wasm.wasm", "application/wasm"),
-    ("lib/tfjs/tfjs-backend-wasm-simd.wasm", "application/wasm"),
     ("models/pose/pose_landmarker_lite.task", "application/octet-stream"),
     ("models/hands/hand_landmarker.task", "application/octet-stream"),
     ("models/face/face_landmarker.task", "application/octet-stream"),
-    ("models/coco-ssd/model.json", "application/json"),
-] + [(f"models/coco-ssd/group1-shard{i}of5", "application/octet-stream") for i in range(1, 6)]
+    ("models/objects/efficientdet_lite0.tflite", "application/octet-stream"),
+    ("models/classifier/efficientnet_lite0.tflite", "application/octet-stream"),
+]
 
 # Script inicial: datos incrustados + fetch() local + URLs blob:.
 RUNTIME = r"""(function () {

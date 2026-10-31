@@ -16,7 +16,7 @@
  *    captura PNG a resolución nativa (otro "destino" con su propio viewport).
  *
  * Orden de capas: heatmap → zonas/líneas → estelas → objetos → personas →
- * manos → rostros → distancias → alertas → editor → HUD.
+ * manos → rostros → distancias → visor del escáner → alertas → editor → HUD.
  */
 import { JOINT_ANGLES, POSTURE_LABEL } from '../analytics/PoseAnalytics.js';
 import { polygonCentroid } from '../analytics/geometry.js';
@@ -135,6 +135,7 @@ export class Renderer {
     if (L.hands) this._hands(scene.hands, o);
     if (L.face) this._faces(scene.faces, o);
     if (L.distances) this._distances(scene.distances);
+    if (o.reticle) this._reticle(o.reticle, o);
     this._alerts(scene, o);
     if (o.editor.mode || o.editor.selected) this._editor(o);
     if (L.hud && o.hud) this._hud(o.hud);
@@ -316,9 +317,32 @@ export class Renderer {
       ctx.globalAlpha = 1;
       if (o.layers.labels) {
         const id = ob.id > 0 ? ` #${ob.id}` : '';
-        this._tag(`${ob.label}${id} ${Math.round((ob.score || 0) * 100)}%`, r.x, r.y - 2 * k, { color: ob.color });
+        const name = ob.display || ob.label;
+        // Detalle del módulo F (raza, tipo exacto) si aporta algo nuevo.
+        const fine = ob.fine && ob.fine.label !== name ? ` · ${ob.fine.label} ${Math.round(ob.fine.score * 100)}%` : '';
+        this._tag(`${name}${id} ${Math.round((ob.score || 0) * 100)}%${fine}`, r.x, r.y - 2 * k, { color: ob.color, border: ob.display ? '#a78bfa' : null });
       }
     }
+  }
+
+  /** Visor central del escáner (módulo F) con lo que reconoce dentro. */
+  _reticle(rt, o) {
+    const { ctx, k } = this.t;
+    const b = rt.roi;
+    const r = this._rect({ x: b.left, y: b.top, w: b.right - b.left, h: b.bottom - b.top });
+    const col = rt.label ? '#a78bfa' : 'rgba(167,139,250,0.55)';
+    this._brackets(r, col, 2.5 * k);
+    // Cruz central discreta.
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2, c = 7 * k;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5 * k;
+    ctx.beginPath();
+    ctx.moveTo(cx - c, cy); ctx.lineTo(cx + c, cy);
+    ctx.moveTo(cx, cy - c); ctx.lineTo(cx, cy + c);
+    ctx.stroke();
+    if (!o.layers.labels) return;
+    const text = rt.label ? `◎ ${rt.label} ${Math.round(rt.score * 100)}%` : rt.waiting ? '◎ Escáner listo' : '◎ Apunta a una cosa…';
+    this._tag(text, cx, r.y + r.h + 22 * k, { align: 'center', size: rt.label ? 14 : 11, color: rt.label ? '#ede9fe' : '#c4b5fd', bg: rt.label ? 'rgba(46,16,101,0.85)' : undefined, border: rt.label ? '#a78bfa' : null });
   }
 
   _persons(persons, o) {

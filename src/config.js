@@ -8,7 +8,7 @@
  * README y en tools/descargar_dependencias.py (herramienta de un solo uso).
  */
 
-export const APP = { name: 'Detéctalo todo', version: '1.0.0' };
+export const APP = { name: 'Detéctalo todo', version: '1.1.0' };
 
 export const VERSIONS = {
   mediapipe: '0.10.35',
@@ -18,7 +18,7 @@ export const VERSIONS = {
 /**
  * Manifiesto de archivos que la app necesita en disco.
  *  - path:   ruta relativa a index.html
- *  - magic:  tipo esperado para validar el contenido (js | wasm | zip | json | bin)
+ *  - magic:  tipo esperado para validar el contenido (js | wasm | zip | tflite | json | bin)
  *  - size:   bytes de la versión fijada (sólo para avisar si difiere)
  *  - needs:  módulos que dependen del archivo
  *  - when:   'simd' / 'nosimd' → sólo se exige según la CPU/navegador
@@ -27,19 +27,25 @@ export const VERSIONS = {
  */
 const MP = `@mediapipe/tasks-vision@${VERSIONS.mediapipe}`;
 const MPM = 'almacén oficial de modelos de MediaPipe (Google)';
+const MP_USERS = ['pose', 'hands', 'face', 'objects', 'classifier'];
+const COCO_NOTE = 'sólo para el modelo alternativo COCO-SSD (TensorFlow.js)';
 export const ASSETS = [
-  { id: 'mp-bundle', path: 'lib/mediapipe/vision_bundle.mjs', magic: 'js', size: 136993, needs: ['pose', 'hands', 'face'], source: `npm ${MP} → vision_bundle.mjs` },
-  { id: 'mp-wasm-js', path: 'lib/mediapipe/wasm/vision_wasm_internal.js', magic: 'js', size: 322044, when: 'simd', needs: ['pose', 'hands', 'face'], source: `npm ${MP} → wasm/vision_wasm_internal.js` },
-  { id: 'mp-wasm', path: 'lib/mediapipe/wasm/vision_wasm_internal.wasm', magic: 'wasm', size: 11153617, when: 'simd', needs: ['pose', 'hands', 'face'], source: `npm ${MP} → wasm/vision_wasm_internal.wasm` },
-  { id: 'mp-wasm-nosimd-js', path: 'lib/mediapipe/wasm/vision_wasm_nosimd_internal.js', magic: 'js', size: 321847, when: 'nosimd', needs: ['pose', 'hands', 'face'], source: `npm ${MP} → wasm/vision_wasm_nosimd_internal.js` },
-  { id: 'mp-wasm-nosimd', path: 'lib/mediapipe/wasm/vision_wasm_nosimd_internal.wasm', magic: 'wasm', size: 10481398, when: 'nosimd', needs: ['pose', 'hands', 'face'], source: `npm ${MP} → wasm/vision_wasm_nosimd_internal.wasm` },
+  { id: 'mp-bundle', path: 'lib/mediapipe/vision_bundle.mjs', magic: 'js', size: 136993, needs: MP_USERS, source: `npm ${MP} → vision_bundle.mjs` },
+  { id: 'mp-wasm-js', path: 'lib/mediapipe/wasm/vision_wasm_internal.js', magic: 'js', size: 322044, when: 'simd', needs: MP_USERS, source: `npm ${MP} → wasm/vision_wasm_internal.js` },
+  { id: 'mp-wasm', path: 'lib/mediapipe/wasm/vision_wasm_internal.wasm', magic: 'wasm', size: 11153617, when: 'simd', needs: MP_USERS, source: `npm ${MP} → wasm/vision_wasm_internal.wasm` },
+  { id: 'mp-wasm-nosimd-js', path: 'lib/mediapipe/wasm/vision_wasm_nosimd_internal.js', magic: 'js', size: 321847, when: 'nosimd', needs: MP_USERS, source: `npm ${MP} → wasm/vision_wasm_nosimd_internal.js` },
+  { id: 'mp-wasm-nosimd', path: 'lib/mediapipe/wasm/vision_wasm_nosimd_internal.wasm', magic: 'wasm', size: 10481398, when: 'nosimd', needs: MP_USERS, source: `npm ${MP} → wasm/vision_wasm_nosimd_internal.wasm` },
 
-  { id: 'tfjs', path: 'lib/tfjs/tf.min.js', magic: 'js', size: 1469843, needs: ['objects'], source: `npm @tensorflow/tfjs@${VERSIONS.tfjs} → dist/tf.min.js` },
-  { id: 'tfjs-webgpu', path: 'lib/tfjs/tf-backend-webgpu.min.js', magic: 'js', size: 325535, optional: true, needs: ['objects'], source: `npm @tensorflow/tfjs-backend-webgpu@${VERSIONS.tfjs} → dist/tf-backend-webgpu.min.js`, note: 'backend WebGPU (opcional, recomendado)' },
-  { id: 'tfjs-wasm', path: 'lib/tfjs/tf-backend-wasm.min.js', magic: 'js', size: 149861, optional: true, needs: ['objects'], source: `npm @tensorflow/tfjs-backend-wasm@${VERSIONS.tfjs} → dist/tf-backend-wasm.min.js`, note: 'backend WASM para equipos sin GPU (opcional)' },
+  { id: 'tfjs', path: 'lib/tfjs/tf.min.js', magic: 'js', size: 1469843, optional: true, needs: ['objects'], source: `npm @tensorflow/tfjs@${VERSIONS.tfjs} → dist/tf.min.js`, note: COCO_NOTE },
+  { id: 'tfjs-webgpu', path: 'lib/tfjs/tf-backend-webgpu.min.js', magic: 'js', size: 325535, optional: true, needs: ['objects'], source: `npm @tensorflow/tfjs-backend-webgpu@${VERSIONS.tfjs} → dist/tf-backend-webgpu.min.js`, note: `backend WebGPU, ${COCO_NOTE}` },
+  { id: 'tfjs-wasm', path: 'lib/tfjs/tf-backend-wasm.min.js', magic: 'js', size: 149861, optional: true, needs: ['objects'], source: `npm @tensorflow/tfjs-backend-wasm@${VERSIONS.tfjs} → dist/tf-backend-wasm.min.js`, note: `backend WASM, ${COCO_NOTE}` },
   { id: 'tfjs-wasm-bin', path: 'lib/tfjs/tfjs-backend-wasm.wasm', magic: 'wasm', size: 311123, optional: true, needs: ['objects'], source: `npm @tensorflow/tfjs-backend-wasm@${VERSIONS.tfjs} → dist/tfjs-backend-wasm.wasm` },
   { id: 'tfjs-wasm-simd-bin', path: 'lib/tfjs/tfjs-backend-wasm-simd.wasm', magic: 'wasm', size: 424594, optional: true, needs: ['objects'], source: `npm @tensorflow/tfjs-backend-wasm@${VERSIONS.tfjs} → dist/tfjs-backend-wasm-simd.wasm` },
   { id: 'tfjs-wasm-threaded-bin', path: 'lib/tfjs/tfjs-backend-wasm-threaded-simd.wasm', magic: 'wasm', size: 435643, optional: true, needs: ['objects'], source: `npm @tensorflow/tfjs-backend-wasm@${VERSIONS.tfjs} → dist/tfjs-backend-wasm-threaded-simd.wasm` },
+
+  { id: 'det-lite0', path: 'models/objects/efficientdet_lite0.tflite', magic: 'tflite', size: 7254339, needs: ['objects'], source: `${MPM}: object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite` },
+  { id: 'det-lite2', path: 'models/objects/efficientdet_lite2.tflite', magic: 'tflite', size: 7515971, optional: true, needs: ['objects'], source: `${MPM}: object_detector/efficientdet_lite2/int8/1/efficientdet_lite2.tflite`, note: 'detector «preciso» EfficientDet-Lite2 (opcional)' },
+  { id: 'classifier', path: 'models/classifier/efficientnet_lite0.tflite', magic: 'tflite', size: 5434517, needs: ['classifier'], source: `${MPM}: image_classifier/efficientnet_lite0/int8/1/efficientnet_lite0.tflite` },
 
   { id: 'pose-lite', path: 'models/pose/pose_landmarker_lite.task', magic: 'zip', size: 5777746, needs: ['pose'], source: `${MPM}: pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task` },
   { id: 'pose-full', path: 'models/pose/pose_landmarker_full.task', magic: 'zip', size: 9398198, optional: true, needs: ['pose'], source: `${MPM}: pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task`, note: 'variante "full" (opcional)' },
@@ -47,12 +53,13 @@ export const ASSETS = [
   { id: 'hands', path: 'models/hands/hand_landmarker.task', magic: 'zip', size: 7819105, needs: ['hands'], source: `${MPM}: hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task` },
   { id: 'face', path: 'models/face/face_landmarker.task', magic: 'zip', size: 3758596, needs: ['face'], source: `${MPM}: face_landmarker/face_landmarker/float16/1/face_landmarker.task` },
 
-  { id: 'coco-json', path: 'models/coco-ssd/model.json', magic: 'json', size: 527315, needs: ['objects'], source: 'almacén oficial de modelos de TensorFlow.js: savedmodel/ssdlite_mobilenet_v2/model.json', shardsFrom: true },
+  { id: 'coco-json', path: 'models/coco-ssd/model.json', magic: 'json', size: 527315, optional: true, needs: ['objects'], source: 'almacén oficial de modelos de TensorFlow.js: savedmodel/ssdlite_mobilenet_v2/model.json', shardsFrom: true, note: COCO_NOTE },
   ...[1, 2, 3, 4, 5].map((i) => ({
     id: `coco-shard${i}`,
     path: `models/coco-ssd/group1-shard${i}of5`,
     magic: 'bin',
     size: i < 5 ? 4194304 : 1257312,
+    optional: true,
     needs: ['objects'],
     source: `almacén oficial de modelos de TensorFlow.js: savedmodel/ssdlite_mobilenet_v2/group1-shard${i}of5`,
   })),
@@ -64,12 +71,25 @@ export const POSE_VARIANTS = {
   heavy: 'models/pose/pose_landmarker_heavy.task',
 };
 
+/**
+ * Modelos del módulo D. `files`: lo que debe existir para poder usarlo (los
+ * de MediaPipe necesitan además su runtime).
+ */
+export const OBJECT_MODELS = {
+  efficientdet_lite0: { label: 'EfficientDet-Lite0', engine: 'mediapipe', path: 'models/objects/efficientdet_lite0.tflite', files: ['models/objects/efficientdet_lite0.tflite'] },
+  efficientdet_lite2: { label: 'EfficientDet-Lite2', engine: 'mediapipe', path: 'models/objects/efficientdet_lite2.tflite', files: ['models/objects/efficientdet_lite2.tflite'] },
+  'coco-ssd': { label: 'COCO-SSD', engine: 'tfjs', path: 'models/coco-ssd/model.json', files: ['lib/tfjs/tf.min.js', 'models/coco-ssd/model.json', ...[1, 2, 3, 4, 5].map((i) => `models/coco-ssd/group1-shard${i}of5`)] },
+};
+
+export const CLASSIFIER_MODEL = 'models/classifier/efficientnet_lite0.tflite';
+
 export const MODULES = [
   { id: 'pose', letter: 'A', name: 'Pose corporal', short: 'Pose' },
   { id: 'hands', letter: 'B', name: 'Manos (21 puntos)', short: 'Manos' },
   { id: 'face', letter: 'C', name: 'Malla facial', short: 'Rostro' },
-  { id: 'objects', letter: 'D', name: 'Objetos (COCO-SSD)', short: 'Objetos' },
+  { id: 'objects', letter: 'D', name: 'Objetos (80 tipos, con caja)', short: 'Objetos' },
   { id: 'motion', letter: 'E', name: 'Movimiento y anomalías', short: 'Movimiento' },
+  { id: 'classifier', letter: 'F', name: 'Reconocimiento (1000 cosas)', short: 'Reconocer' },
 ];
 
 /**
@@ -78,12 +98,13 @@ export const MODULES = [
  * (requiere recargar la página: cambio de backend).
  */
 export const SETTINGS = [
-  // --- Módulos A–E (interruptores principales) -------------------------------
+  // --- Módulos A–F (interruptores principales) -------------------------------
   { key: 'pose.enabled', type: 'bool', def: true, group: 'modules', module: 'pose', label: 'A · Pose corporal' },
   { key: 'hands.enabled', type: 'bool', def: true, group: 'modules', module: 'hands', label: 'B · Manos' },
   { key: 'face.enabled', type: 'bool', def: true, group: 'modules', module: 'face', label: 'C · Malla facial' },
   { key: 'objects.enabled', type: 'bool', def: true, group: 'modules', module: 'objects', label: 'D · Objetos' },
   { key: 'motion.enabled', type: 'bool', def: true, group: 'modules', module: 'motion', label: 'E · Movimiento' },
+  { key: 'classifier.enabled', type: 'bool', def: true, group: 'modules', module: 'classifier', label: 'F · Reconocer 1000 cosas' },
 
   // --- Opciones por módulo --------------------------------------------------------
   { key: 'pose.variant', type: 'select', def: 'lite', group: 'opt-pose', label: 'Modelo', options: [['lite', 'Lite (rápido)'], ['full', 'Full'], ['heavy', 'Heavy (preciso)']], apply: 'task' },
@@ -95,10 +116,19 @@ export const SETTINGS = [
   { key: 'face.numFaces', type: 'range', def: 2, min: 1, max: 4, step: 1, group: 'opt-face', label: 'Rostros máx.', apply: 'task' },
   { key: 'face.mesh', type: 'select', def: 'contornos', group: 'opt-face', label: 'Dibujo', options: [['contornos', 'Contornos'], ['malla', 'Malla completa'], ['profundidad', 'Puntos por profundidad (3D)']] },
   { key: 'face.show3d', type: 'bool', def: true, group: 'opt-face', label: 'Visor 3D de la malla' },
-  { key: 'objects.minScore', type: 'range', def: 0.5, min: 0.2, max: 0.9, step: 0.05, group: 'opt-objects', label: 'Confianza mínima', fmt: 'pct' },
-  { key: 'objects.maxResults', type: 'range', def: 20, min: 1, max: 50, step: 1, group: 'opt-objects', label: 'Detecciones máx.' },
+  { key: 'objects.model', type: 'select', def: 'efficientdet_lite0', group: 'opt-objects', label: 'Modelo', options: [['efficientdet_lite0', 'EfficientDet-Lite0 (recomendado)'], ['efficientdet_lite2', 'EfficientDet-Lite2 (más preciso, más lento)'], ['coco-ssd', 'COCO-SSD (TensorFlow.js)']], apply: 'task' },
+  { key: 'objects.minScore', type: 'range', def: 0.5, min: 0.3, max: 0.9, step: 0.05, group: 'opt-objects', label: 'Confianza mínima', fmt: 'pct' },
+  { key: 'objects.maxResults', type: 'range', def: 20, min: 1, max: 40, step: 1, group: 'opt-objects', label: 'Detecciones máx.' },
   { key: 'motion.heatmap', type: 'bool', def: false, group: 'opt-motion', label: 'Heatmap de movimiento' },
   { key: 'motion.anomaly', type: 'bool', def: true, group: 'opt-motion', label: 'Alerta de anomalía (actividad brusca)' },
+  { key: 'classifier.reticle', type: 'bool', def: true, group: 'opt-classifier', label: 'Visor central: apunta a una cosa y dice qué es' },
+  { key: 'classifier.refine', type: 'bool', def: true, group: 'opt-classifier', label: 'Afinar objetos (raza, tipo exacto…)', help: 'Clasifica el recorte de cada objeto seguido: «perro» → «golden retriever». Con el filtro anti-fantasmas también corrige confusiones perro/gato, coche/camión…' },
+  { key: 'classifier.scene', type: 'bool', def: true, group: 'opt-classifier', label: 'Describir la escena completa' },
+  { key: 'classifier.minScore', type: 'range', def: 0.3, min: 0.1, max: 0.9, step: 0.05, group: 'opt-classifier', label: 'Confianza mínima', fmt: 'pct' },
+
+  // --- Precisión (anti-fantasmas) ---------------------------------------------------
+  { key: 'precision.strict', type: 'bool', def: true, group: 'precision', label: 'Filtro anti-fantasmas', help: 'Un objeto sólo aparece si se confirma en 3 análisis seguidos (2 si es muy claro); se exige más confianza a las clases que más se inventan (mesa, silla, televisor, bolso…); se descartan cajas diminutas, astillas, cajas de pantalla completa dudosas, duplicados y esqueletos de pose sin tronco reconocible.' },
+  { key: 'objects.minArea', type: 'range', def: 0.25, min: 0, max: 3, step: 0.05, group: 'precision', label: 'Tamaño mínimo de objeto', fmt: 'pctn' },
 
   // --- Inteligencia derivada (sección 4) -----------------------------------------
   { key: 'derived.tracking', type: 'bool', def: true, group: 'derived', label: 'Tracking con ID persistente', help: 'Necesario para actividad, caída, inmovilidad, zonas, líneas, estelas y distancias.' },
@@ -132,12 +162,13 @@ export const SETTINGS = [
   { key: 'perf.cadence.face', type: 'range', def: 2, min: 1, max: 10, step: 1, group: 'perf', label: 'Malla facial: 1 de cada N', fmt: 'n' },
   { key: 'perf.cadence.objects', type: 'range', def: 3, min: 1, max: 10, step: 1, group: 'perf', label: 'Objetos: 1 de cada N', fmt: 'n' },
   { key: 'perf.cadence.motion', type: 'range', def: 2, min: 1, max: 10, step: 1, group: 'perf', label: 'Movimiento: 1 de cada N', fmt: 'n' },
+  { key: 'perf.cadence.classifier', type: 'range', def: 6, min: 2, max: 20, step: 1, group: 'perf', label: 'Reconocimiento: 1 de cada N', fmt: 'n' },
   { key: 'perf.workers', type: 'bool', def: true, group: 'perf', label: 'Inferencia en Web Workers (recomendado)', apply: 'reload', help: 'Cada modelo se ejecuta en su propio hilo: el render no se bloquea aunque la inferencia sea lenta. Si falla, se usa el hilo principal.' },
   { key: 'perf.adaptive', type: 'bool', def: true, group: 'perf', label: 'Control de carga adaptativo' },
   { key: 'perf.fpsTarget', type: 'range', def: 30, min: 20, max: 55, step: 1, group: 'perf', label: 'Umbral FPS de render', fmt: 'fps' },
   { key: 'perf.budgetMs', type: 'range', def: 16, min: 4, max: 40, step: 1, group: 'perf', label: 'Presupuesto de análisis por frame', fmt: 'ms' },
   { key: 'perf.maxSide', type: 'select', def: '640', group: 'perf', label: 'Resolución máx. de inferencia', options: [['320', '320 px'], ['480', '480 px'], ['640', '640 px'], ['960', '960 px'], ['1280', '1280 px']] },
-  { key: 'perf.tfBackend', type: 'select', def: 'auto', group: 'perf', label: 'Backend TF.js (objetos)', options: [['auto', 'Automático'], ['webgpu', 'WebGPU'], ['webgl', 'WebGL'], ['wasm', 'WASM (CPU)'], ['cpu', 'CPU (JS)']], apply: 'reload' },
+  { key: 'perf.tfBackend', type: 'select', def: 'auto', group: 'perf', label: 'Backend TF.js (sólo COCO-SSD)', options: [['auto', 'Automático'], ['webgpu', 'WebGPU'], ['webgl', 'WebGL'], ['wasm', 'WASM (CPU)'], ['cpu', 'CPU (JS)']], apply: 'reload' },
   { key: 'perf.mpDelegate', type: 'select', def: 'auto', group: 'perf', label: 'Delegado MediaPipe', options: [['auto', 'Automático'], ['GPU', 'GPU (WebGL2)'], ['CPU', 'CPU (WASM)']], apply: 'reload' },
 
   // --- Vista ---------------------------------------------------------------------------

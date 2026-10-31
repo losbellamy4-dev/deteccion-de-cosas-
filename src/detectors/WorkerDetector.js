@@ -11,6 +11,9 @@
 import { Detector } from './Detector.js';
 import { HeatPainter, MOTION_W } from './MotionDetector.js';
 
+/** Ajustes por inferencia que se copian al detector del worker (si existen aquí). */
+const OPT_KEYS = ['minScore', 'maxResults', 'rois', 'ghostFilter'];
+
 export class WorkerDetector extends Detector {
   constructor(meta) {
     super(meta);
@@ -80,8 +83,16 @@ export class WorkerDetector extends Detector {
   }
 
   infer(input, frame) {
-    const opts = this.minScore != null ? { minScore: this.minScore, maxResults: this.maxResults } : null;
-    return createImageBitmap(input).then((bitmap) => this._send({ type: 'infer', bitmap, t: frame.t, opts }, [bitmap]));
+    let opts = null;
+    for (const k of OPT_KEYS) if (this[k] !== undefined) (opts || (opts = {}))[k] = this[k];
+    // `input` es el lienzo de inferencia o, para el módulo F, el propio <video>
+    // (se reduce aquí a `maxSide` si hace falta, sin pasar por el hilo principal).
+    const w = input.videoWidth || input.width, h = input.videoHeight || input.height;
+    const s = this.maxSide ? Math.min(1, this.maxSide / Math.max(w, h)) : 1;
+    const bmp = s < 1
+      ? createImageBitmap(input, { resizeWidth: Math.round(w * s), resizeHeight: Math.round(h * s), resizeQuality: 'medium' })
+      : createImageBitmap(input);
+    return bmp.then((bitmap) => this._send({ type: 'infer', bitmap, t: frame.t, opts }, [bitmap]));
   }
 
   _send(msg, transfer = []) {

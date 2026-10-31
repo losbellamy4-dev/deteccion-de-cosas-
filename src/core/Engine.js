@@ -13,7 +13,9 @@
  *  3. Cada resultado pasa por su Tracker (IDs persistentes) y por la analítica
  *     (actividad, caída, inmovilidad, gestos, métricas faciales, zonas,
  *     líneas, distancias), que genera eventos para el EventLog y el
- *     AlertManager.
+ *     AlertManager. Los objetos pasan antes por el filtro anti-fantasmas
+ *     (analytics/ObjectFilter.js) y el reconocimiento de 1000 cosas (módulo
+ *     F) clasifica el visor central, la escena y el recorte de cada objeto.
  *  4. Se repinta el overlay SIEMPRE, haya o no análisis en ese frame: la
  *     interfaz sigue fluida aunque el análisis vaya a menos.
  *  5. Cada 0,5 s el control adaptativo decide si degradar o recuperar.
@@ -29,8 +31,13 @@ import { PoseState, poseFeatures, footPoint, StillnessMeter, bySensitivity, POST
 import { classifyHand, StableLabel } from '../analytics/HandAnalytics.js';
 import { faceMetrics, FaceState, gazeLabel } from '../analytics/FaceAnalytics.js';
 import { emaAlpha } from '../analytics/geometry.js';
+import { filterDetections } from '../analytics/ObjectFilter.js';
+import { reticleRoi, squareRoi, ScoreSmoother } from '../analytics/Recognition.js';
+import { IMAGENET_ES, imagenetToCoco, CORRECTABLE } from '../analytics/imagenetLabels.js';
 
 const KIND_LABEL = { webcam: 'WEBCAM', file: 'ARCHIVO', screen: 'PANTALLA' };
+/** Confianza mínima de lo que piden los detectores de objetos (el resto lo filtra ObjectFilter). */
+const OBJECT_FLOOR = 0.25;
 
 export class Engine extends Emitter {
   constructor({ source, renderer, settings, log, alerts, zones }) {
@@ -58,6 +65,9 @@ export class Engine extends Emitter {
     this.connections = { pose: [], hand: [], face: { tess: [], contours: [], irises: [] } };
     this.unique = { persons: new Set(), objects: new Set() };
     this.motionStats = freshMotionStats();
+    this.recog = freshRecog();
+    this.filtered = 0; // detecciones descartadas por el filtro anti-fantasmas
+    this._applyStrict(settings.get('precision.strict'));
     this.frameIndex = 0;
     this.sceneVersion = 0;
     this.settingsVersion = 0;
@@ -74,6 +84,7 @@ export class Engine extends Emitter {
     this.tf = null;
     this.editor = { mode: null, points: [], cursor: null, a: null, selected: null };
     this._lastFrameSeq = -1;
+    this._mainFreeAt = 0;
     this._lastStats = 0;
     this._loopErrors = 0;
     this._tick = this._tick.bind(this);
@@ -91,7 +102,28 @@ export class Engine extends Emitter {
   addDetector(det) {
     det.enabled = !!this.settings.get(`${det.id}.enabled`);
     det.cadence = this.settings.get(`perf.cadence.${det.id}`) || det.cadence;
+    if (det.id === 'objects') {
+      // El detector entrega todo lo que supere un umbral bajo; el umbral del
+      // usuario, las clases dudosas y el doble umbral se aplican en _onObjects.
+      det.minScore = OBJECT_FLOOR;
+      det.maxResults = 40;
+    }
+    if (det.id === 'pose') det.ghostFilter = !!this.settings.get('precision.strict');
+    if (det.id === 'classifier') det.maxSide = 1280;
     this.detectors.set(det.id, det);
+  }
+
+  /**
+   * Modo estricto (anti-fantasmas): los objetos necesitan 3 detecciones para
+   * confirmarse (2 si su confianza media es ≥ 0,7) y la pose descarta
+   * esqueletos sin tronco reconocible.
+   */
+  _applyStrict(on) {
+    const ot = this.trackers.object;
+    ot.minHits = on ? 3 : 2;
+    ot.fastConfirm = on ? { hits: 2, meanScore: 0.7 } : null;
+    const p = this.get('pose');
+    if (p) p.ghostFilter = !!on;
   }
 
   get(id) { return this.detectors.get(id); }
@@ -185,7 +217,7 @@ export class Engine extends Emitter {
     const all = [...this.detectors.values()];
     const budget = this.settings.get('perf.budgetMs');
     const cores = navigator.hardwareConcurrency || 4;
-    const due = force
+    let due = force
       ? all.filter((d) => d.enabled && d.ready && !d.inFlight)
       : this.scheduler.select(all, this.frameIndex, {
         budgetMs: budget,
@@ -194,16 +226,28 @@ export class Engine extends Emitter {
         gapFactor: this.adaptive.gapFactor,
         now,
       });
+    // Ciclo de trabajo del hilo principal: tras una inferencia local (sin
+    // worker) de L ms se deja el hilo libre al menos L × (1 + hueco adaptativo)
+    // ms para pintar. Con modelos lentos en el hilo principal (modo portable,
+    // equipos sin GPU) el vídeo sigue viéndose fluido en vez de a saltos.
+    if (!force && now < this._mainFreeAt) due = due.filter((d) => d.isWorker);
     if (!due.length) return;
     const input = this._prepareInput();
     const t0 = performance.now();
-    let ran = 0;
+    let ran = 0, localMs = 0;
     for (const d of due) {
       // Comprobación real del presupuesto (la estimación puede quedarse corta).
       if (!force && ran > 0 && performance.now() - t0 > budget) break;
-      d.run(input, frame, this._onResult, this._onError);
+      // El módulo F recorta trozos pequeños (visor, objetos): se le da el
+      // fotograma a resolución nativa (el worker lo limita a 1280 px) para
+      // que cada recorte tenga detalle suficiente.
+      if (d.id === 'classifier') d.rois = this._classifierRois(d, frame);
+      const s0 = performance.now();
+      d.run(d.id === 'classifier' ? this.source.el : input, frame, this._onResult, this._onError);
+      if (!d.isWorker) localMs += performance.now() - s0;
       ran++;
     }
+    if (localMs > 8) this._mainFreeAt = performance.now() + localMs * (1 + this.adaptive.gapFactor);
     if (ran) this.analysisRate.tick(now);
   }
 
@@ -243,6 +287,7 @@ export class Engine extends Emitter {
     const m = this.get('motion');
     if (m && m.reset) m.reset();
     this.motionStats = freshMotionStats();
+    this.recog = freshRecog();
     this.lastT = null;
     this.adaptive.hold(1500);
     if (!silent) this.log.add('system', 'sistema', `Reinicio del seguimiento (${reason})`);
@@ -261,6 +306,7 @@ export class Engine extends Emitter {
       case 'hands': this._onHands(result, frame); break;
       case 'face': this._onFaces(result, frame); break;
       case 'motion': this._onMotion(result, frame); break;
+      case 'classifier': this._onClassify(result, frame); break;
       default: break;
     }
   }
@@ -328,11 +374,15 @@ export class Engine extends Emitter {
   /**
    * Detecciones que aún no tienen ID (pista tentativa, primer avistamiento):
    * se DIBUJAN para que la respuesta visual sea inmediata, pero no cuentan en
-   * contadores, zonas, líneas ni alertas hasta confirmarse.
+   * contadores, zonas, líneas ni alertas hasta confirmarse. Con el filtro
+   * anti-fantasmas, un objeto sin confirmar sólo se dibuja si es muy claro.
    */
   _collectTentative() {
-    const pick = (tr) => tr.tracks.filter((t) => !t.confirmed && t.seenNow);
-    this.scene.tentative = [...pick(this.trackers.person), ...pick(this.trackers.object)];
+    const strict = this.settings.get('precision.strict');
+    const minObj = strict ? 0.75 : 0;
+    const minPerson = strict && this.scene.personSource === 'objects' ? 0.75 : 0;
+    const pick = (tr, min) => tr.tracks.filter((t) => !t.confirmed && t.seenNow && (t.score ?? 1) >= min);
+    this.scene.tentative = [...pick(this.trackers.person, minPerson), ...pick(this.trackers.object, minObj)];
   }
 
   _poseCfg() {
@@ -386,42 +436,53 @@ export class Engine extends Emitter {
   }
 
   _onObjects(objs, frame) {
+    const S = this.settings;
     const poseActive = this._poseActive();
+    // Filtro anti-fantasmas: umbral por clase, tamaño, forma y duplicados.
+    const f = filterDetections(objs, {
+      minScore: S.get('objects.minScore'),
+      minAreaPct: S.get('objects.minArea'),
+      strict: S.get('precision.strict'),
+      aspect: this._aspect(),
+      floor: OBJECT_FLOOR,
+    });
+    this.filtered += f.dropped;
     const persons = [], others = [];
-    for (const o of objs) (o.classId === 1 ? persons : others).push(o);
+    for (const o of [...f.strong.slice(0, S.get('objects.maxResults')), ...f.weak]) (o.classId === 1 ? persons : others).push(o);
 
-    if (!this.settings.get('derived.tracking')) {
+    if (!S.get('derived.tracking')) {
+      // Sin tracking no hay doble umbral: sólo se muestran las detecciones fuertes.
       this.trackers.object.reset();
-      this.scene.objects = others.map((o) => untracked('object', o));
+      this.scene.objects = others.filter((o) => !o.weak).map((o) => untracked('object', o));
       if (!poseActive) {
         this.trackers.person.reset();
         this.scene.personSource = 'objects';
-        this.scene.persons = persons.map((o) => untracked('person', o));
+        this.scene.persons = persons.filter((o) => !o.weak).map((o) => untracked('person', o));
       }
       return;
     }
 
-    const r = this.trackers.object.update(others.map((o) => ({ bbox: o.bbox, cls: o.label, label: o.label, score: o.score, data: o })), frame.t);
+    const r = this.trackers.object.update(others.map((o) => ({ bbox: o.bbox, cls: o.label, label: o.label, score: o.score, data: o, weak: o.weak })), frame.t);
     for (const tr of r.created) {
       this.unique.objects.add(tr.id);
       this.log.add('info', 'objetos', `Objeto '${tr.label}' ID #${tr.id} rastreado`, { id: tr.id, clase: tr.label, confianza: +tr.score.toFixed(2) }, frame.media);
     }
     for (const tr of r.removed) {
-      if (tr.lastSeen - tr.firstSeen > 3) this.log.add('info', 'objetos', `Objeto '${tr.label}' ID #${tr.id} fuera de escena`, { id: tr.id, clase: tr.label }, frame.media);
+      if (tr.lastSeen - tr.firstSeen > 3) this.log.add('info', 'objetos', `Objeto '${objLabel(tr)}' ID #${tr.id} fuera de escena`, { id: tr.id, clase: objLabel(tr) }, frame.media);
     }
     this.scene.objects = r.tracks;
     this._stamp(r.tracks);
 
-    // Sin módulo de pose activo, las personas salen de COCO-SSD (clase 1).
+    // Sin módulo de pose activo, las personas salen del detector de objetos (clase 1).
     if (!poseActive) {
       if (this.scene.personSource !== 'objects') {
         this.trackers.person.reset();
         this.scene.personSource = 'objects';
       }
-      const pr = this.trackers.person.update(persons.map((o) => ({ bbox: o.bbox, score: o.score, data: { bbox: o.bbox, score: o.score } })), frame.t);
+      const pr = this.trackers.person.update(persons.map((o) => ({ bbox: o.bbox, score: o.score, data: { bbox: o.bbox, score: o.score }, weak: o.weak })), frame.t);
       for (const tr of pr.created) {
         this.unique.persons.add(tr.id);
-        this.log.add('info', 'objetos', `Persona #${tr.id} detectada (COCO-SSD)`, { id: tr.id }, frame.media);
+        this.log.add('info', 'objetos', `Persona #${tr.id} detectada (detector de objetos)`, { id: tr.id }, frame.media);
       }
       if (this.settings.get('derived.immobility')) {
         const a = this._aspect();
@@ -557,6 +618,105 @@ export class Engine extends Emitter {
     ms.var = (1 - a) * (ms.var + a * d * d);
   }
 
+  // ---------------------------------------------------------------------------
+  // Módulo F: reconocimiento de 1000 cosas
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Regiones que clasificará el módulo F en esta ejecución, por prioridad:
+   * visor central (siempre), escena completa (una de cada tres ejecuciones) y
+   * objetos seguidos por turnos (el que lleva más tiempo sin clasificarse
+   * primero). En el hilo principal (sin workers) se clasifican menos regiones
+   * por ejecución para no restar FPS de render.
+   */
+  _classifierRois(det, frame) {
+    const S = this.settings;
+    const A = this._aspect();
+    const rec = this.recog;
+    const max = det.isWorker ? 3 : 1;
+    rec.run++;
+    const out = [];
+    if (S.get('classifier.reticle')) out.push({ key: 'reticle', roi: reticleRoi(A) });
+    if (S.get('classifier.scene') && (rec.run % 3 === 1 || !out.length)) out.push({ key: 'scene', roi: null });
+    const obj = this.get('objects');
+    if (S.get('classifier.refine') && obj && obj.enabled && obj.ready) {
+      const cands = this.scene.objects
+        .filter((o) => o.id > 0 && o.seenNow && o.bbox.w * o.bbox.h >= 0.005)
+        .sort((a, b) => (a.state.fineAt ?? -1) - (b.state.fineAt ?? -1));
+      for (const o of cands) {
+        if (out.length >= max) break;
+        o.state.fineAt = frame.index;
+        out.push({ key: `obj:${o.id}`, roi: squareRoi(o.bbox, A, 1.15) });
+      }
+    }
+    return out.slice(0, max);
+  }
+
+  _onClassify(res, frame) {
+    const rec = this.recog;
+    const minScore = this.settings.get('classifier.minScore');
+    for (const it of res.items || []) {
+      if (it.key === 'scene') {
+        rec.scene.update(it.cats, frame.t);
+      } else if (it.key === 'reticle') {
+        rec.reticle.update(it.cats, frame.t);
+        const top = rec.reticle.top(1)[0];
+        const idx = top && top.s >= minScore ? top.i : null;
+        // Se anota en el registro cuando el visor "se decide" por algo nuevo.
+        if (rec.reticleLabel.update(idx, frame.t) && idx != null) {
+          this.log.add('info', 'escaner', `◎ Escáner: ${IMAGENET_ES[idx]} (${Math.round(top.s * 100)} %)`, { cosa: IMAGENET_ES[idx], confianza: +top.s.toFixed(2) }, frame.media);
+        }
+      } else if (it.key.startsWith('obj:')) {
+        const id = Number(it.key.slice(4));
+        const tr = this.trackers.object.tracks.find((x) => x.id === id);
+        if (!tr) continue;
+        const sm = tr.state.fine || (tr.state.fine = new ScoreSmoother({ window: 5 }));
+        sm.update(it.cats, frame.t);
+        this._refineObject(tr, minScore, frame);
+      }
+    }
+  }
+
+  /**
+   * Etiqueta fina de un objeto («perro» → «golden retriever») y, con el filtro
+   * anti-fantasmas, corrección de la clase del detector cuando el clasificador
+   * la contradice con claridad (perro ↔ gato, coche ↔ camión…).
+   */
+  _refineObject(tr, minScore, frame) {
+    const sm = tr.state.fine;
+    const ranked = sm.top(20);
+    const top = ranked[0];
+    // Etiqueta fina: la clase concreta más probable, si es lo bastante segura.
+    tr.fine = top && top.s >= minScore ? { label: IMAGENET_ES[top.i], score: top.s, coco: imagenetToCoco(top.i) } : null;
+    if (tr.fine) {
+      const st = tr.state.fineLabel || (tr.state.fineLabel = new StableLabel(1));
+      if (st.update(tr.fine.label, frame.t)) {
+        this.log.add('info', 'escaner', `◎ Objeto '${objLabel(tr)}' #${tr.id}: ${tr.fine.label} (${Math.round(top.s * 100)} %)`, { id: tr.id, clase: objLabel(tr), detalle: tr.fine.label, confianza: +top.s.toFixed(2) }, frame.media);
+      }
+    }
+    // Corrección por GRUPO: se suman las clases finas de cada categoría COCO
+    // (todas las razas de perro, todos los gatos…). Así «gato egipcio 30 % +
+    // gato atigrado 20 %» cuenta como «gato 50 %» frente al «perro» del detector.
+    const groups = new Map();
+    for (const { i, s } of ranked) {
+      const g = imagenetToCoco(i);
+      if (g) groups.set(g, (groups.get(g) || 0) + s);
+    }
+    let best = null, bestS = 0;
+    for (const [g, s] of groups) if (s > bestS) { best = g; bestS = s; }
+    const own = groups.get(tr.label) || 0;
+    const contradicts = !!best && best !== tr.label && CORRECTABLE.has(tr.label) && bestS >= 0.3 && bestS > own + 0.15;
+    if (this.settings.get('precision.strict') && contradicts && sm.n >= 2) {
+      if (tr.display !== best) {
+        tr.display = best;
+        const why = tr.fine ? `${tr.fine.label} ${Math.round(tr.fine.score * 100)} %` : `${Math.round(bestS * 100)} %`;
+        this.log.add('warn', 'escaner', `Objeto #${tr.id}: «${tr.label}» corregido a «${best}» (${why})`, { id: tr.id, antes: tr.label, despues: best, confianza: +bestS.toFixed(2) }, frame.media);
+      }
+    } else if (tr.display && !contradicts) {
+      tr.display = null;
+    }
+  }
+
   /**
    * Zonas de intrusión y tripwires. Se pasan SIEMPRE todas las pistas vivas
    * (personas y, si procede, objetos): una pista ausente se interpreta como
@@ -573,7 +733,7 @@ export class Engine extends Emitter {
     for (const e of evs) {
       const tr = e.track;
       const desc = describeTrack(tr);
-      const tipo = tr.kind === 'person' ? 'persona' : `objeto '${tr.label}'`;
+      const tipo = tr.kind === 'person' ? 'persona' : `objeto '${objLabel(tr)}'`;
       if (e.type === 'zone_enter') {
         this.alerts.raise({ key: `intrusion:${e.zone.id}:${tr.kind}:${tr.id}`, type: 'intrusion', message: `⚠ Intrusión en ${e.zone.name} — ID #${tr.id} (${tipo})`, track: tr, data: { zona: e.zone.name, id: tr.id, tipo }, media: frame.media, cooldown: 0 });
       } else if (e.type === 'zone_exit') {
@@ -624,14 +784,15 @@ export class Engine extends Emitter {
     }
     const c = key.match(/^perf\.cadence\.(\w+)$/);
     if (c && this.detectors.has(c[1])) { this.detectors.get(c[1]).cadence = value; return; }
-    const obj = this.get('objects');
-    if (key === 'objects.minScore' && obj) obj.minScore = value;
-    if (key === 'objects.maxResults' && obj) obj.maxResults = value;
+    if (key === 'precision.strict') this._applyStrict(value);
     if (key === 'alert.sound') this.alerts.sound = value;
     if (key === 'derived.tracking') this.resetTemporal(value ? 'tracking activado' : 'tracking desactivado');
     if (key === 'perf.adaptive' && !value) this.adaptive.reset();
     if (this.source.ready && this.source.paused) this.requestAnalysis();
   }
+
+  /** Olvida el estado de un módulo (al desactivarlo o cambiar de modelo). */
+  clearModule(id) { this._clearModule(id); }
 
   _clearModule(id) {
     this.sceneVersion++;
@@ -662,6 +823,10 @@ export class Engine extends Emitter {
         this.scene.motion = null;
         this.scene.motionCanvas = null;
         if (this.get('motion')) this.get('motion').reset();
+        break;
+      case 'classifier':
+        this.recog = freshRecog();
+        for (const o of this.trackers.object.tracks) { o.fine = null; o.display = null; delete o.state.fine; delete o.state.fineLabel; }
         break;
       default:
         break;
@@ -696,9 +861,17 @@ export class Engine extends Emitter {
       hud: S.get('view.hud'),
     };
     const alertTracks = new Set(this.alerts.active.filter((a) => a.trackId != null).map((a) => `${a.kind}:${a.trackId}`));
+    const cls = this.get('classifier');
+    let reticle = null;
+    if (cls && cls.enabled && cls.ready && S.get('classifier.reticle') && this.source.ready) {
+      const top = this.recog.reticle.top(1)[0];
+      const ok = top && top.s >= S.get('classifier.minScore');
+      reticle = { roi: reticleRoi(this._aspect()), label: ok ? IMAGENET_ES[top.i] : null, score: ok ? top.s : 0, waiting: !this.recog.reticle.n };
+    }
     return {
       hasSource: this.source.ready,
       layers,
+      reticle,
       zones: this.zones,
       editor: this.editor,
       alerts: this.alerts.active,
@@ -762,7 +935,16 @@ export class Engine extends Emitter {
     }));
     const handsSeen = sc.hands.filter((h) => h.seenNow);
     const classes = new Map();
-    for (const o of sc.objects) if (o.seenNow) classes.set(o.label, (classes.get(o.label) || 0) + 1);
+    for (const o of sc.objects) if (o.seenNow) classes.set(objLabel(o), (classes.get(objLabel(o)) || 0) + 1);
+    const minRec = S.get('classifier.minScore');
+    const named = (list) => list.map(({ i, s }) => ({ label: IMAGENET_ES[i], score: s }));
+    const recog = {
+      reticle: S.get('classifier.reticle') ? named(this.recog.reticle.top(3)) : null,
+      scene: S.get('classifier.scene') ? named(this.recog.scene.top(5)) : null,
+      objects: sc.objects.filter((o) => o.id > 0 && o.fine).slice(0, 8)
+        .map((o) => ({ id: o.id, color: o.color, label: objLabel(o), corrected: !!o.display, from: o.label, fine: o.fine.label, score: o.fine.score })),
+      minScore: minRec,
+    };
     return {
       renderFps: this.renderRate.rate(now),
       analysisFps: this.analysisRate.rate(now),
@@ -806,12 +988,24 @@ export class Engine extends Emitter {
         };
       }),
       tracking: S.get('derived.tracking'),
+      recog,
+      filtered: this.filtered,
     };
   }
 }
 
 function freshMotionStats() {
   return { mean: 0, var: 0, n: 0, lastT: null, history: [], z: 0 };
+}
+
+/** Estado del módulo F: visor (responde en ~0,6 s) y escena (~1,5 s). */
+function freshRecog() {
+  return { reticle: new ScoreSmoother({ tau: 0.6 }), scene: new ScoreSmoother({ tau: 1.5 }), reticleLabel: new StableLabel(0.4), run: 0 };
+}
+
+/** Nombre mostrado de un objeto: el corregido por el módulo F, si lo hay. */
+export function objLabel(tr) {
+  return tr.display || tr.label;
 }
 
 /** Pseudo-pista para cuando el tracking está desactivado (sin ID ni estado). */
@@ -824,7 +1018,7 @@ function untracked(kind, d, features) {
 
 export function describeTrack(tr) {
   if (tr.kind === 'person') return `Persona #${tr.id}`;
-  if (tr.kind === 'object') return `Objeto '${tr.label}' #${tr.id}`;
+  if (tr.kind === 'object') return `Objeto '${objLabel(tr)}' #${tr.id}`;
   return `#${tr.id}`;
 }
 

@@ -1,0 +1,7 @@
+# Lo que no hace falta servir en la web (la app es estática: index.html, src/, lib/, models/).
+tests/
+tools/
+dist/
+serve.py
+package.json
+*.part

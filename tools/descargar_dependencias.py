@@ -5,8 +5,13 @@ descargar_dependencias.py — Descarga UNA SOLA VEZ las librerías y modelos que
 
   * Librerías JS: registro oficial de npm (tarballs versionados e inmutables).
     Se extraen únicamente los archivos necesarios.
-  * Modelos MediaPipe: almacén oficial de modelos de Google (rutas versionadas /1/).
-  * Modelo COCO-SSD: almacén oficial de modelos de TensorFlow.js.
+  * Modelos MediaPipe (pose, manos, rostro, objetos EfficientDet y
+    reconocedor de 1000 cosas EfficientNet): almacén oficial de modelos de
+    Google (rutas versionadas /1/).
+  * Modelo COCO-SSD (alternativo): almacén oficial de modelos de TensorFlow.js.
+
+NOTA: el repositorio ya incluye /lib y /models listos para usar. Este script
+sólo hace falta si se borraron, o para las variantes de pose "full"/"heavy".
 
 Cada archivo se verifica con su SHA-256 (calculado sobre las versiones
 probadas con esta app). Sólo usa la biblioteca estándar de Python 3.
@@ -56,7 +61,7 @@ FILES = [
     ("lib/mediapipe/wasm/vision_wasm_nosimd_internal.wasm", "tasks-vision", "package/wasm/vision_wasm_nosimd_internal.wasm", 10481398,
      "8a3092d34c79d3f57e6ba8592105e8a90f6b07c27891ffecd14cca428bfd3e31", "recomendado"),
     ("lib/tfjs/tf.min.js", "tfjs", "package/dist/tf.min.js", 1469843,
-     "300dfae273d20b4046f46a06d735688f03675a807561e9bcb5f664eb2f3d2831", "necesario"),
+     "300dfae273d20b4046f46a06d735688f03675a807561e9bcb5f664eb2f3d2831", "recomendado"),
     ("lib/tfjs/tf-backend-webgpu.min.js", "tfjs-webgpu", "package/dist/tf-backend-webgpu.min.js", 325535,
      "c02ae6ef5e7fff6dc9cec8b14b45e36e8894614f3ef006973e98f7568b590f3f", "recomendado"),
     ("lib/tfjs/tf-backend-wasm.min.js", "tfjs-wasm", "package/dist/tf-backend-wasm.min.js", 149861,
@@ -78,19 +83,26 @@ FILES = [
      "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1", "necesario"),
     ("models/face/face_landmarker.task", f"{MP_MODELS}/face_landmarker/face_landmarker/float16/1/face_landmarker.task", None, 3758596,
      "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff", "necesario"),
+    ("models/objects/efficientdet_lite0.tflite", f"{MP_MODELS}/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite", None, 7254339,
+     "4b59100025bea1235a84c1038879a6cccc9f6c49f5e41144e91e74d99e780993", "necesario"),
+    ("models/objects/efficientdet_lite2.tflite", f"{MP_MODELS}/object_detector/efficientdet_lite2/int8/1/efficientdet_lite2.tflite", None, 7515971,
+     "b3f50554cb0ea559e90328845f7d9ba4d13c8bff372914d24e06bc8bb72fa896", "recomendado"),
+    ("models/classifier/efficientnet_lite0.tflite", f"{MP_MODELS}/image_classifier/efficientnet_lite0/int8/1/efficientnet_lite0.tflite", None, 5434517,
+     "bc2ffe19c1118de0c0c2a9088992da5589722656e0fba81421385300a4a34b16", "necesario"),
 
+    # Modelo alternativo COCO-SSD (TensorFlow.js).
     ("models/coco-ssd/model.json", f"{TFJS_MODELS}/model.json", None, 527315,
-     "3770b2528339b1e3340cb74360e1e40401816b009779aeb8d0cce3a4353ea3a9", "necesario"),
+     "3770b2528339b1e3340cb74360e1e40401816b009779aeb8d0cce3a4353ea3a9", "recomendado"),
     ("models/coco-ssd/group1-shard1of5", f"{TFJS_MODELS}/group1-shard1of5", None, 4194304,
-     "0e7af0f713e98521252321f7f84892c31cefccccec3ac64c84e5065b75ed5646", "necesario"),
+     "0e7af0f713e98521252321f7f84892c31cefccccec3ac64c84e5065b75ed5646", "recomendado"),
     ("models/coco-ssd/group1-shard2of5", f"{TFJS_MODELS}/group1-shard2of5", None, 4194304,
-     "74cc6cfc2c4510c9cd81b8ad4cebf6f6a8f305119bb365ce0eb96276da38519a", "necesario"),
+     "74cc6cfc2c4510c9cd81b8ad4cebf6f6a8f305119bb365ce0eb96276da38519a", "recomendado"),
     ("models/coco-ssd/group1-shard3of5", f"{TFJS_MODELS}/group1-shard3of5", None, 4194304,
-     "50383033f893eae136392a403e8f70ade5efd90867df5695c4ca5ac640e14f38", "necesario"),
+     "50383033f893eae136392a403e8f70ade5efd90867df5695c4ca5ac640e14f38", "recomendado"),
     ("models/coco-ssd/group1-shard4of5", f"{TFJS_MODELS}/group1-shard4of5", None, 4194304,
-     "d856dc534c780068bbf6c666ce1516df2c8433d87578aa31fcdf197de7058cc2", "necesario"),
+     "d856dc534c780068bbf6c666ce1516df2c8433d87578aa31fcdf197de7058cc2", "recomendado"),
     ("models/coco-ssd/group1-shard5of5", f"{TFJS_MODELS}/group1-shard5of5", None, 1257312,
-     "3d356f1fb6dfca6af78c56db34d9326706d0196e303f9de6b04f236ca79ed309", "necesario"),
+     "3d356f1fb6dfca6af78c56db34d9326706d0196e303f9de6b04f236ca79ed309", "recomendado"),
 ]
 
 

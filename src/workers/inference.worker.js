@@ -1,6 +1,6 @@
 /*
  * inference.worker.js — Web Worker CLÁSICO que aloja UN modelo de IA (pose,
- * manos, malla facial u objetos) fuera del hilo principal.
+ * manos, malla facial, objetos o reconocimiento) fuera del hilo principal.
  *
  * Por qué: MediaPipe ejecuta la inferencia de forma síncrona y TF.js con el
  * backend WASM también; en el hilo principal, una inferencia de 80 ms congela
@@ -32,6 +32,8 @@ const MP_MODULES = {
   pose: ['../detectors/PoseDetector.js', 'PoseDetector'],
   hands: ['../detectors/HandDetector.js', 'HandDetector'],
   face: ['../detectors/FaceDetector.js', 'FaceDetector'],
+  objects: ['../detectors/EfficientDetDetector.js', 'EfficientDetDetector'],
+  classifier: ['../detectors/ClassifierDetector.js', 'ClassifierDetector'],
 };
 
 // Los mensajes se procesan en orden estricto (init antes que infer, etc.).

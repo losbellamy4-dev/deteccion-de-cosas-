@@ -1,6 +1,8 @@
 # Detéctalo todo
 
-Sistema web de **visión por computador y analítica de vídeo que funciona 100 % en local**: pose corporal multipersona, manos con gestos, malla facial 3D, objetos COCO y movimiento, con *tracking*, alertas (caída, inmovilidad, intrusión, somnolencia…), zonas, líneas de cruce y exportación del registro. Una vez abierto **no hace ni una sola petición de red**: puedes desconectar el equipo.
+Sistema web de **visión por computador y analítica de vídeo que funciona 100 % en local**: pose corporal multipersona, manos con gestos, malla facial 3D, objetos COCO con **filtro anti-fantasmas**, **reconocimiento de 1000 tipos de cosas** (animales y razas, comida, herramientas, instrumentos, vehículos, ropa, aparatos…) y movimiento, con *tracking*, alertas (caída, inmovilidad, intrusión, somnolencia…), zonas, líneas de cruce y exportación del registro. Una vez abierto **no hace ni una sola petición de red**: puedes desconectar el equipo.
+
+**Versión web:** {{VERCEL_URL}} (la misma app, servida por Vercel; los fotogramas se procesan en tu navegador y nunca se envían a ningún servidor).
 
 > **Aviso importante.** Las heurísticas (caída, inmovilidad, somnolencia, actividad, gestos, sonrisa, mirada) son **aproximadas**. No son aptas para uso médico, de teleasistencia, de conducción ni de seguridad crítica: tendrán falsos positivos y falsos negativos.
 
@@ -14,7 +16,7 @@ Sistema web de **visión por computador y analítica de vídeo que funciona 100 
 4. [Ejecución y requisitos](#4-ejecución-y-requisitos)
 5. [Arquitectura](#5-arquitectura)
 6. [Rendimiento](#6-rendimiento)
-7. [Módulos de detección (A–E)](#7-módulos-de-detección-ae)
+7. [Módulos de detección (A–F) y filtro anti-fantasmas](#7-módulos-de-detección-af-y-filtro-anti-fantasmas)
 8. [Inteligencia derivada](#8-inteligencia-derivada)
 9. [Interfaz, atajos y exportación](#9-interfaz-atajos-y-exportación)
 10. [Errores y robustez](#10-errores-y-robustez)
@@ -27,8 +29,10 @@ Sistema web de **visión por computador y analítica de vídeo que funciona 100 
 
 ## 1. Inicio rápido
 
+El repositorio **ya incluye** `lib/` y `models/` (salvo la variante opcional *heavy* de pose), así que basta con:
+
 ```bash
-# 1) Descargar UNA SOLA VEZ librerías y modelos (≈ 70 MB) desde sus orígenes oficiales
+# 1) (Sólo si faltan lib/ o models/) descargarlos UNA VEZ desde sus orígenes oficiales
 python tools/descargar_dependencias.py
 
 # 2) Servir la carpeta en local
@@ -42,13 +46,13 @@ A partir del paso 3 puedes desconectar la red. Si prefieres no usar el script, d
 
 ### Versión portable: un solo HTML con doble clic
 
-Si no quieres usar servidor ni terminal, genera un único archivo con todo dentro (≈ 45 MB):
+Si no quieres usar servidor ni terminal, genera un único archivo con todo dentro (≈ 36 MB):
 
 ```bash
 python tools/construir_portable.py
 ```
 
-El resultado, `dist/detectalo-todo-portable.html`, se abre con **doble clic** en Chrome o Edge y funciona sin servidor y sin conexión (tarda unos segundos en arrancar). Lleva incrustados las librerías y los modelos imprescindibles; su CSP sólo permite datos `data:`/`blob:`, así que tampoco puede conectarse a ninguna red. Diferencia: en este modo los modelos se ejecutan en el hilo principal (sin Web Workers), así que en equipos sin GPU va menos fluido que la versión con servidor; si notas tirones, desactiva los módulos que no uses.
+El resultado, `dist/detectalo-todo-portable.html`, se abre con **doble clic** en Chrome o Edge y funciona sin servidor y sin conexión (tarda unos segundos en arrancar). Lleva incrustados las librerías y los modelos imprescindibles; su CSP sólo permite datos `data:`/`blob:`, así que tampoco puede conectarse a ninguna red. Diferencia: en este modo los modelos se ejecutan en el hilo principal (sin Web Workers); un limitador de ciclo de trabajo deja el hilo libre para pintar tras cada inferencia, así que el vídeo se ve fluido aunque el análisis vaya más despacio. Para que pese menos no incluye las piezas opcionales (EfficientDet-Lite2, COCO-SSD/TF.js, pose full/heavy).
 
 ---
 
@@ -67,7 +71,9 @@ El resultado, `dist/detectalo-todo-portable.html`, se abre con **doble clic** en
 
 - **MediaPipe Tasks Vision se fija en la 0.10.35.** Las versiones 1.x del paquete incluyen un módulo de telemetría que envía datos de uso a un servidor externo de Google. La 0.10.35 no contiene ningún código de red aparte de leer los archivos que le pasamos (verificado inspeccionando el bundle). Además, la app no usa `FilesetResolver` con URL remota: construye a mano las rutas locales del WASM.
 - **TensorFlow.js 4.22.0.** Su `tf.min.js` incluye un *regenerator-runtime* antiguo que, bajo una CSP estricta sin `unsafe-eval`, intentaría `Function(...)` y abortaría la carga. La app predeclara `globalThis.regeneratorRuntime` antes de cargarlo: así funciona con la CSP estricta sin relajarla.
-- **COCO-SSD** usa los pesos oficiales de `@tensorflow-models/coco-ssd` (SSDLite MobileNet v2), pero la inferencia y el post-proceso son propios: lectura de resultados 100 % asíncrona (el paquete original usa `dataSync()` y congela la interfaz) y NMS en JavaScript sin cambiar el backend global.
+- **Objetos con EfficientDet-Lite0** (MediaPipe Object Detector, float16) por defecto: más preciso que COCO-SSD (mAP COCO ≈ 26 frente a ≈ 22) y con la NMS dentro del modelo. **EfficientDet-Lite2** (int8, mAP ≈ 34) es la opción «más preciso, más lento». MediaPipe devuelve `index = -1` con estos modelos, así que la clase se identifica por el nombre de su mapa de etiquetas (verificado).
+- **Reconocimiento de 1000 cosas con EfficientNet-Lite0** (MediaPipe Image Classifier, int8, ImageNet-1k). Se comparó con EfficientNet-Lite2 sobre las imágenes de prueba oficiales y Lite0 acertó más y es más rápido. Las 1000 etiquetas están traducidas al español en el mismo orden que el modelo (`src/analytics/imagenetLabels.js`, comprobado con un test).
+- **COCO-SSD** (modelo alternativo, opcional) usa los pesos oficiales de `@tensorflow-models/coco-ssd` (SSDLite MobileNet v2), pero la inferencia y el post-proceso son propios: lectura de resultados 100 % asíncrona (el paquete original usa `dataSync()` y congela la interfaz) y NMS en JavaScript sin cambiar el backend global.
 
 ---
 
@@ -86,7 +92,7 @@ Origen oficial: **registro de npm** (paquetes versionados e inmutables). El arch
 | `lib/mediapipe/wasm/vision_wasm_internal.wasm` | ídem → `wasm/vision_wasm_internal.wasm` | 10,6 MB | **Sí** | `6a5c64584c2ab61c763b6e204afbdbc7ce1caf7f5216187322bca8df94f646bc` |
 | `lib/mediapipe/wasm/vision_wasm_nosimd_internal.js` | ídem → `wasm/vision_wasm_nosimd_internal.js` | 314 KB | Sólo navegadores sin WASM SIMD | `438d1fe8ff7f4d946025bc211c291543c037d8a3785ed4eee60f1f521b236296` |
 | `lib/mediapipe/wasm/vision_wasm_nosimd_internal.wasm` | ídem → `wasm/vision_wasm_nosimd_internal.wasm` | 10,0 MB | Sólo navegadores sin WASM SIMD | `8a3092d34c79d3f57e6ba8592105e8a90f6b07c27891ffecd14cca428bfd3e31` |
-| `lib/tfjs/tf.min.js` | [`@tensorflow/tfjs@4.22.0`](https://registry.npmjs.org/@tensorflow/tfjs/-/tfjs-4.22.0.tgz) → `dist/tf.min.js` | 1,4 MB | **Sí** | `300dfae273d20b4046f46a06d735688f03675a807561e9bcb5f664eb2f3d2831` |
+| `lib/tfjs/tf.min.js` | [`@tensorflow/tfjs@4.22.0`](https://registry.npmjs.org/@tensorflow/tfjs/-/tfjs-4.22.0.tgz) → `dist/tf.min.js` | 1,4 MB | Sólo para COCO-SSD | `300dfae273d20b4046f46a06d735688f03675a807561e9bcb5f664eb2f3d2831` |
 | `lib/tfjs/tf-backend-webgpu.min.js` | [`@tensorflow/tfjs-backend-webgpu@4.22.0`](https://registry.npmjs.org/@tensorflow/tfjs-backend-webgpu/-/tfjs-backend-webgpu-4.22.0.tgz) → `dist/tf-backend-webgpu.min.js` | 318 KB | Recomendado (WebGPU) | `c02ae6ef5e7fff6dc9cec8b14b45e36e8894614f3ef006973e98f7568b590f3f` |
 | `lib/tfjs/tf-backend-wasm.min.js` | [`@tensorflow/tfjs-backend-wasm@4.22.0`](https://registry.npmjs.org/@tensorflow/tfjs-backend-wasm/-/tfjs-backend-wasm-4.22.0.tgz) → `dist/tf-backend-wasm.min.js` | 146 KB | Recomendado (equipos sin GPU) | `691bbec0ef8b5a7f17f212e9c5d85832030f90d030b46e99acb4dea1fb16f009` |
 | `lib/tfjs/tfjs-backend-wasm.wasm` | ídem → `dist/tfjs-backend-wasm.wasm` | 304 KB | Recomendado | `70a5d516060464e5269f01c74bac1772d6b8ab6cb612acf16b5cdaf61f78d892` |
@@ -102,16 +108,19 @@ Origen oficial: **registro de npm** (paquetes versionados e inmutables). El arch
 | `models/pose/pose_landmarker_heavy.task` | `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task` | 29,2 MB | Opcional (variante "Heavy") | `64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b` |
 | `models/hands/hand_landmarker.task` | `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task` | 7,5 MB | **Sí** | `fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1` |
 | `models/face/face_landmarker.task` | `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task` | 3,6 MB | **Sí** | `64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff` |
-| `models/coco-ssd/model.json` | `https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/model.json` | 515 KB | **Sí** | `3770b2528339b1e3340cb74360e1e40401816b009779aeb8d0cce3a4353ea3a9` |
-| `models/coco-ssd/group1-shard1of5` | `https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/group1-shard1of5` | 4,0 MB | **Sí** | `0e7af0f713e98521252321f7f84892c31cefccccec3ac64c84e5065b75ed5646` |
-| `models/coco-ssd/group1-shard2of5` | `…/ssdlite_mobilenet_v2/group1-shard2of5` | 4,0 MB | **Sí** | `74cc6cfc2c4510c9cd81b8ad4cebf6f6a8f305119bb365ce0eb96276da38519a` |
-| `models/coco-ssd/group1-shard3of5` | `…/ssdlite_mobilenet_v2/group1-shard3of5` | 4,0 MB | **Sí** | `50383033f893eae136392a403e8f70ade5efd90867df5695c4ca5ac640e14f38` |
-| `models/coco-ssd/group1-shard4of5` | `…/ssdlite_mobilenet_v2/group1-shard4of5` | 4,0 MB | **Sí** | `d856dc534c780068bbf6c666ce1516df2c8433d87578aa31fcdf197de7058cc2` |
-| `models/coco-ssd/group1-shard5of5` | `…/ssdlite_mobilenet_v2/group1-shard5of5` | 1,2 MB | **Sí** | `3d356f1fb6dfca6af78c56db34d9326706d0196e303f9de6b04f236ca79ed309` |
+| `models/objects/efficientdet_lite0.tflite` | `https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite` | 6,9 MB | **Sí** (objetos) | `4b59100025bea1235a84c1038879a6cccc9f6c49f5e41144e91e74d99e780993` |
+| `models/objects/efficientdet_lite2.tflite` | `https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/int8/1/efficientdet_lite2.tflite` | 7,2 MB | Opcional («más preciso») | `b3f50554cb0ea559e90328845f7d9ba4d13c8bff372914d24e06bc8bb72fa896` |
+| `models/classifier/efficientnet_lite0.tflite` | `https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite0/int8/1/efficientnet_lite0.tflite` | 5,2 MB | **Sí** (1000 cosas) | `bc2ffe19c1118de0c0c2a9088992da5589722656e0fba81421385300a4a34b16` |
+| `models/coco-ssd/model.json` | `https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/model.json` | 515 KB | Opcional (COCO-SSD) | `3770b2528339b1e3340cb74360e1e40401816b009779aeb8d0cce3a4353ea3a9` |
+| `models/coco-ssd/group1-shard1of5` | `https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/group1-shard1of5` | 4,0 MB | Opcional | `0e7af0f713e98521252321f7f84892c31cefccccec3ac64c84e5065b75ed5646` |
+| `models/coco-ssd/group1-shard2of5` | `…/ssdlite_mobilenet_v2/group1-shard2of5` | 4,0 MB | Opcional | `74cc6cfc2c4510c9cd81b8ad4cebf6f6a8f305119bb365ce0eb96276da38519a` |
+| `models/coco-ssd/group1-shard3of5` | `…/ssdlite_mobilenet_v2/group1-shard3of5` | 4,0 MB | Opcional | `50383033f893eae136392a403e8f70ade5efd90867df5695c4ca5ac640e14f38` |
+| `models/coco-ssd/group1-shard4of5` | `…/ssdlite_mobilenet_v2/group1-shard4of5` | 4,0 MB | Opcional | `d856dc534c780068bbf6c666ce1516df2c8433d87578aa31fcdf197de7058cc2` |
+| `models/coco-ssd/group1-shard5of5` | `…/ssdlite_mobilenet_v2/group1-shard5of5` | 1,2 MB | Opcional | `3d356f1fb6dfca6af78c56db34d9326706d0196e303f9de6b04f236ca79ed309` |
 
 Se usan rutas **versionadas** (`/1/`) de MediaPipe en lugar de `/latest/` para que el contenido no cambie bajo tus pies (de hecho, `pose_landmarker_full` difiere entre `/1/` y `/latest/`).
 
-Opciones del script: `--minimo` (sólo lo imprescindible, ≈ 53 MB), `--pose-full`, `--pose-heavy`, `--forzar`, `--verificar`, `--sin-verificar`.
+Opciones del script: `--minimo` (sólo lo imprescindible, ≈ 52 MB), `--pose-full`, `--pose-heavy`, `--forzar`, `--verificar`, `--sin-verificar`.
 
 ---
 
@@ -219,15 +228,29 @@ Latencias por inferencia medidas en esa misma máquina (sin GPU): pose ≈ 75 ms
 
 ---
 
-## 7. Módulos de detección (A–E)
+## 7. Módulos de detección (A–F) y filtro anti-fantasmas
 
 Todos se activan y desactivan en caliente y se combinan libremente.
 
 - **A · Pose corporal** — MediaPipe Pose Landmarker (lite por defecto; full/heavy opcionales), hasta 6 personas, 33 puntos con visibilidad. Esqueleto coloreado por certeza (rojo → amarillo → verde), ángulos articulares en tiempo real (codos, hombros, caderas, rodillas) calculados con las coordenadas 3D del modelo.
 - **B · Manos** — MediaPipe Hand Landmarker, 21 puntos por mano, izquierda/derecha diferenciadas (la lateralidad se verificó con las imágenes oficiales `right_hands.jpg`/`left_hands.jpg`: correcta con imagen sin espejar; hay un ajuste para cámaras que ya entregan imagen espejada). Gestos: puño, mano abierta, pinza, señalar, victoria, pulgar arriba/abajo, cuernos, OK y conteo de dedos. Cada mano se asocia a la persona cuya muñeca está más cerca.
 - **C · Malla facial** — MediaPipe Face Landmarker: 478 puntos (con iris), dibujo de contornos, malla completa o puntos coloreados por profundidad, **visor 3D** girable, orientación de cabeza (giro, inclinación, ladeo) desde la matriz de transformación facial (convención verificada empíricamente) y mirada aproximada (iris + giro).
-- **D · Objetos** — COCO-SSD (80 clases, etiquetas en español) con TF.js; cajas con etiqueta, confianza e ID.
+- **D · Objetos** — EfficientDet-Lite0 (por defecto), EfficientDet-Lite2 (más preciso) o COCO-SSD con TF.js (alternativo): 80 clases con caja, etiqueta en español, confianza e ID. Si el módulo F está activo, cada objeto lleva además su **etiqueta fina** («perro #3 · corgi Pembroke 48 %»).
 - **E · Movimiento y anomalías** — diferencia de fotogramas (sin modelo), heatmap opcional, energía de movimiento con gráfica y alerta de **anomalía** (pico muy por encima de lo habitual en la escena). Contadores en vivo: personas (actuales/únicas), objetos (actuales/únicos), manos (izq./der.), rostros, ocupación de zonas y cruces.
+- **F · Reconocer 1000 cosas** — clasificador EfficientNet-Lite0 (ImageNet, 1000 clases en español). Un clasificador no localiza, así que en cada ejecución clasifica varias regiones del mismo fotograma (a resolución nativa, hasta 1280 px):
+  - **Visor central:** un recuadro violeta en el centro del vídeo; apunta la cámara a una cosa y aparece su nombre y confianza (p. ej. «◎ hamburguesa con queso 92 %»), con el top-3 en el panel *Escáner*. Cuando se decide por algo nuevo se anota en el registro.
+  - **Escena completa:** top-5 de lo que hay en toda la imagen.
+  - **Afinar objetos:** clasifica por turnos el recorte de cada objeto seguido por D y le añade la clase concreta (raza de perro, tipo de vehículo, comida exacta…). Con el filtro anti-fantasmas, si el clasificador contradice con claridad al detector dentro de grupos conocidos (perro ↔ gato, coche ↔ camión ↔ autobús…, sumando las clases finas de cada grupo) **corrige la etiqueta** y lo registra.
+  - Las puntuaciones se suavizan en el tiempo para que el nombre no salte entre dos clases parecidas.
+
+**Filtro anti-fantasmas** (sección *Precisión* del panel izquierdo, activado por defecto):
+
+- Los objetos sólo reciben ID y aparecen en contadores, zonas y alertas tras **3 detecciones** (2 si su confianza media es ≥ 70 %); un objeto sin confirmar sólo se dibuja si es muy claro (≥ 75 %).
+- A las clases que los detectores COCO más se inventan (mesa, silla, cama, sofá, televisor, inodoro, nevera, horno, fregadero, banco, cometa, paraguas, frisbi, pelota, bolso, corbata) se les exige +10 % de confianza.
+- Se descartan cajas diminutas (tamaño mínimo configurable, 0,25 % de la imagen), astillas, cajas de pantalla completa con confianza dudosa y duplicados de distinta clase sobre el mismo objeto.
+- **Doble umbral** (como ByteTrack): las detecciones algo por debajo del umbral nunca crean objetos, pero sí mantienen vivos los ya confirmados, así que un objeto real no parpadea cuando su confianza baja un momento.
+- Pose: se descartan esqueletos con menos de 6 puntos fiables o sin tronco reconocible (hombro + nariz o cadera). MediaPipe usa confianza mínima 0,6 (en vez de 0,5) en pose, manos y rostro.
+- El panel muestra cuántas detecciones dudosas se han descartado en la sesión.
 
 ---
 
@@ -255,9 +278,9 @@ Todas las coordenadas se guardan **normalizadas respecto a la imagen de origen**
 ## 9. Interfaz, atajos y exportación
 
 - **Cabecera:** estado del motor, FPS de render, FPS de análisis, backend activo, nivel de carga y resolución de inferencia.
-- **Panel izquierdo:** interruptores A–E (con estado, backend, latencia y opciones de cada modelo), funciones derivadas, herramientas de zonas/líneas, sensibilidad de alertas, rendimiento (cadencias, presupuesto, umbral FPS, resolución máxima, backend, workers) y vista.
+- **Panel izquierdo:** interruptores A–F (con estado, backend, latencia y opciones de cada modelo), funciones derivadas, herramientas de zonas/líneas, sensibilidad de alertas, rendimiento (cadencias, presupuesto, umbral FPS, resolución máxima, backend, workers) y vista.
 - **Centro:** fuente (webcam con selector de cámara, archivo —también arrastrando— o pantalla), vídeo con overlay y transporte (play/pausa, avance de un fotograma también en directo, barra de posición, velocidad, bucle).
-- **Panel derecho:** contadores en vivo, tabla de modelos (backend, 1/N efectivo, Hz, ms), alertas, **registro de eventos en directo** con filtros, entidades (postura, ángulos, EAR, parpadeos, orientación…), visor 3D de la malla y gráfica de movimiento.
+- **Panel derecho:** escáner de 1000 cosas (visor central, escena, objetos afinados), contadores en vivo, tabla de modelos (backend, 1/N efectivo, Hz, ms), alertas, **registro de eventos en directo** con filtros, entidades (postura, ángulos, EAR, parpadeos, orientación…), visor 3D de la malla y gráfica de movimiento.
 - **Atajos:** `Espacio` play/pausa · `→` avanzar fotograma · `Z` dibujar zona · `L` dibujar línea · `Intro` cerrar zona · `Retroceso` deshacer vértice · `Supr` borrar selección · `Esc` cancelar · `W` webcam · `O` abrir archivo · `P` captura PNG.
 - **Exportación local** (nada se sube a ningún sitio): registro en **JSON** o **CSV** (UTF-8 con BOM; celdas protegidas contra inyección de fórmulas) y **captura PNG** del fotograma con el overlay a resolución nativa.
 - Ajustes y zonas se recuerdan en el almacenamiento local del navegador.
@@ -295,7 +318,7 @@ python tools/verificar_offline.py --hash
 python tools/descargar_dependencias.py --verificar
 ```
 
-Las pruebas unitarias (41) cubren gestos y postura con **landmarks reales** obtenidos con MediaPipe sobre sus imágenes de prueba oficiales (`tests/fixtures/`), y caída, inmovilidad, tracker, húngaro, zonas, tripwires, EAR, orientación de cabeza, post-proceso SSD, planificador y control adaptativo con secuencias sintéticas.
+Las pruebas unitarias (48) cubren las 1000 etiquetas y su orden, el filtro anti-fantasmas, el doble umbral del tracker, el filtro de esqueletos fantasma, las regiones del escáner, gestos y postura con **landmarks reales** obtenidos con MediaPipe sobre sus imágenes de prueba oficiales (`tests/fixtures/`), y caída, inmovilidad, tracker, húngaro, zonas, tripwires, EAR, orientación de cabeza, post-proceso SSD, planificador y control adaptativo con secuencias sintéticas.
 
 ---
 
@@ -315,4 +338,4 @@ Las pruebas unitarias (41) cubren gestos y postura con **landmarks reales** obte
 
 ## 14. Licencias de terceros
 
-Los archivos de `lib/` y `models/` no se incluyen en el repositorio; se descargan de sus orígenes oficiales y conservan sus licencias: MediaPipe Tasks y sus modelos (Apache 2.0, Google), TensorFlow.js y sus backends (Apache 2.0, Google), COCO-SSD (Apache 2.0, Google). Por defecto `.gitignore` excluye esos binarios; si quieres versionarlos para distribuir una carpeta lista para usar sin conexión, elimina esas líneas del `.gitignore` (o usa Git LFS).
+Los archivos de `lib/` y `models/` se incluyen sin modificar, tal como se publican en sus orígenes oficiales, y conservan sus licencias: MediaPipe Tasks y sus modelos —pose, manos, rostro, EfficientDet-Lite y EfficientNet-Lite— (Apache 2.0, Google), TensorFlow.js y sus backends (Apache 2.0, Google), COCO-SSD (Apache 2.0, Google). Las etiquetas de ImageNet se han traducido al español para esta app.

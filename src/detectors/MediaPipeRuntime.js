@@ -79,7 +79,9 @@ function warmup(task, mode) {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, 64, 64);
   }
-  const r = mode === 'VIDEO' ? task.detectForVideo(blank, 1) : task.detect(blank);
+  let r;
+  if (mode === 'VIDEO') r = task.detectForVideo(blank, 1);
+  else r = typeof task.classify === 'function' ? task.classify(blank) : task.detect(blank);
   if (r && typeof r.close === 'function') r.close();
 }
 

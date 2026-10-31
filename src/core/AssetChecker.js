@@ -26,11 +26,13 @@ export class AssetError extends Error {
 /**
  * Firmas esperadas y hasta qué desplazamiento se buscan. Los .task de
  * MediaPipe son archivos ZIP precedidos de 2 bytes nulos (firma "PK\x03\x04"
- * en el desplazamiento 2, verificado con los modelos oficiales).
+ * en el desplazamiento 2, verificado con los modelos oficiales). Los .tflite
+ * son FlatBuffers con el identificador "TFL3" en el desplazamiento 4.
  */
 const MAGIC = {
   wasm: { sig: [0x00, 0x61, 0x73, 0x6d], maxOffset: 0, name: 'WebAssembly' }, // \0asm
   zip: { sig: [0x50, 0x4b, 0x03, 0x04], maxOffset: 8, name: 'modelo .task (ZIP)' },
+  tflite: { sig: [0x54, 0x46, 0x4c, 0x33], maxOffset: 4, name: 'modelo TFLite' }, // TFL3
 };
 
 function hasSignature(head, { sig, maxOffset }) {
@@ -43,7 +45,7 @@ function hasSignature(head, { sig, maxOffset }) {
 /**
  * Valida la firma de un binario ya leído; lanza un error claro si no cuadra.
  * @param {Uint8Array} bytes
- * @param {'wasm'|'zip'} kind
+ * @param {'wasm'|'zip'|'tflite'} kind
  * @param {string} path
  */
 export function assertMagic(bytes, kind, path) {

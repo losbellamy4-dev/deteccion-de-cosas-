@@ -35,6 +35,7 @@ export class UIController {
 
   build() {
     this._buildModules();
+    this._buildGroup('precision', $('precision'), true);
     this._buildGroup('derived', $('derived'));
     this._buildGroup('sens', $('sens'));
     this._buildGroup('perf', $('perf'));
@@ -583,6 +584,7 @@ export class UIController {
     }
     this._renderModules(s);
     this._renderModels(s);
+    this._renderRecog(s);
     this._renderCounters(s);
     this._renderEntities(s);
     this._renderAlerts(s);
@@ -590,6 +592,48 @@ export class UIController {
     this._syncTime(s.source);
     if (s.zones.length || s.lines.length) this._renderZoneList();
     setText($('mem-info'), `${s.tf ? `TF.js: ${s.tf.numTensors} tensores vivos · ${(s.tf.numBytes / 1048576).toFixed(1)} MB (constante = sin fugas) · ` : ''}hilo principal: ${s.frameWork.toFixed(1)} ms/frame`);
+    setText($('filter-info'), this.settings.get('precision.strict')
+      ? `Activo. Detecciones dudosas descartadas en esta sesión: ${s.filtered}.`
+      : `Desactivado: se muestran todas las detecciones que superen la confianza mínima (descartadas: ${s.filtered}).`);
+  }
+
+  /** Panel del escáner (módulo F): visor central, escena y objetos afinados. */
+  _renderRecog(s) {
+    const r = s.recog;
+    const d = s.detectors.find((x) => x.id === 'classifier');
+    const on = !!(d && d.enabled && d.status === 'ready');
+    const q = (list) => (list || []).map((c) => [c.label, Math.round(c.score * 50)]);
+    const key = JSON.stringify([on, d && d.status, q(r.reticle), q(r.scene), r.objects.map((o) => [o.id, o.label, o.fine, Math.round(o.score * 50), o.corrected]), r.minScore]);
+    patch($('recog'), key, () => {
+      if (!on) {
+        const why = !d ? 'Módulo no disponible.' : d.status === 'missing' || d.status === 'error' ? `No disponible: ${d.detail}` : d.enabled ? 'Cargando el modelo de reconocimiento…' : 'Activa «F · Reconocer 1000 cosas» en el panel izquierdo para usar el escáner.';
+        return [h('p', { class: 'hint', text: why })];
+      }
+      const pct = (v) => `${Math.round(v * 100)} %`;
+      const bar = (c) => h('div', { class: 'rbar' },
+        h('div', { class: 'lbl', title: c.label }, h('i', { style: { width: `${Math.round(Math.min(1, c.score) * 100)}%` } }), h('span', { text: c.label })),
+        h('b', { text: pct(c.score) }));
+      const out = [];
+      if (r.reticle) {
+        const top = r.reticle[0];
+        const ok = top && top.score >= r.minScore;
+        out.push(h('div', { class: 'recog-block' },
+          h('div', { class: 'recog-h', text: 'Visor central' }),
+          h('div', { class: `recog-top${ok ? '' : ' wait'}`, text: ok ? top.label : 'Apunta la cámara a una cosa y céntrala en el visor…' }),
+          ...r.reticle.map(bar)));
+      }
+      if (r.scene && r.scene.length) {
+        out.push(h('div', { class: 'recog-block' }, h('div', { class: 'recog-h', text: 'Escena completa' }), ...r.scene.map(bar)));
+      }
+      if (r.objects.length) {
+        out.push(h('div', { class: 'recog-block' }, h('div', { class: 'recog-h', text: 'Objetos afinados' }),
+          ...r.objects.map((o) => h('div', { class: 'entity', style: { borderLeftColor: o.color } },
+            h('span', { class: 't', text: `#${o.id} ${o.corrected ? `${o.from} → ${o.label} (corregido)` : o.label}` }),
+            h('span', { class: 'k', text: `${o.fine} · ${pct(o.score)}` })))));
+      }
+      if (!out.length) out.push(h('p', { class: 'hint', text: 'Activa el visor, la escena o el afinado de objetos en las opciones del módulo F.' }));
+      return out;
+    });
   }
 
   _renderModels(s) {
@@ -623,7 +667,7 @@ export class UIController {
       card(`${crossIn}/${crossOut}`, 'Entradas/salidas', `· ${s.lines.length} líneas`),
     );
     const chips = c.classes.map(([label, n]) => h('span', { class: 'chip', text: `${label} ×${n}` }));
-    if (c.personSource === 'objects') chips.unshift(h('span', { class: 'chip', title: 'Pose desactivada: las personas se obtienen de COCO-SSD', text: 'personas vía COCO-SSD' }));
+    if (c.personSource === 'objects') chips.unshift(h('span', { class: 'chip', title: 'Pose desactivada: las personas se obtienen del detector de objetos', text: 'personas vía detector de objetos' }));
     $('class-chips').replaceChildren(...chips);
   }
 
@@ -706,6 +750,7 @@ function patch(el, key, build) {
 function fmtSetting(spec, v) {
   switch (spec.fmt) {
     case 'pct': return `${Math.round(v * 100)} %`;
+    case 'pctn': return `${Number(v).toFixed(2)} % de la imagen`;
     case 's': return `${Number(v).toFixed(spec.step < 1 ? 1 : 0)} s`;
     case 'ms': return `${v} ms`;
     case 'fps': return `${v} FPS`;

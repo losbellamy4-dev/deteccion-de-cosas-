@@ -9,15 +9,16 @@
  *  3. Comprueba TODOS los archivos de /lib y /models. Si falta alguno se dice
  *     qué archivo y dónde va; los módulos que no dependen de él siguen
  *     funcionando. Jamás se intenta descargar nada de Internet.
- *  4. MediaPipe: crea pose, manos y malla facial a partir de los bytes de cada
- *     .task (progreso por modelo), cada uno en su propio Web Worker (o en el
- *     hilo principal como respaldo), con el delegado GPU→CPU que funcione.
- *  5. TF.js: activa el primer backend que funcione (WebGPU → WebGL → WASM →
- *     CPU) y carga COCO-SSD; si la ejecución de prueba falla en un backend,
- *     pasa al siguiente. También en un worker, con respaldo local.
+ *  4. MediaPipe: crea pose, manos, malla facial, objetos (EfficientDet) y el
+ *     reconocedor de 1000 cosas a partir de los bytes de cada modelo
+ *     (progreso por modelo), cada uno en su propio Web Worker (o en el hilo
+ *     principal como respaldo), con el delegado GPU→CPU que funcione.
+ *  5. TF.js (sólo si se elige el modelo alternativo COCO-SSD): activa el
+ *     primer backend que funcione (WebGPU → WebGL → WASM → CPU); si la
+ *     ejecución de prueba falla en un backend, pasa al siguiente.
  *  6. Arranca el bucle de render y espera a que el usuario elija una fuente.
  */
-import { APP, ASSETS, SETTINGS, POSE_VARIANTS, VERSIONS, MODULES } from './config.js';
+import { APP, ASSETS, SETTINGS, POSE_VARIANTS, VERSIONS, MODULES, OBJECT_MODELS, CLASSIFIER_MODEL } from './config.js';
 import { Settings, safeStorage } from './core/Settings.js';
 import { EventLog } from './analytics/EventLog.js';
 import { AlertManager } from './analytics/AlertManager.js';
@@ -32,6 +33,8 @@ import { PoseDetector } from './detectors/PoseDetector.js';
 import { HandDetector } from './detectors/HandDetector.js';
 import { FaceDetector } from './detectors/FaceDetector.js';
 import { ObjectDetector, backendLabel } from './detectors/ObjectDetector.js';
+import { EfficientDetDetector } from './detectors/EfficientDetDetector.js';
+import { ClassifierDetector } from './detectors/ClassifierDetector.js';
 import { MotionDetector } from './detectors/MotionDetector.js';
 import { WorkerDetector, MotionWorkerDetector } from './detectors/WorkerDetector.js';
 import { UIController } from './ui/UIController.js';
@@ -120,23 +123,32 @@ async function bootModels(ctx) {
     ctx.notices.push(`El modelo de pose «${settings.get('pose.variant')}» no está instalado; se usa «lite».`);
     settings.set('pose.variant', 'lite');
   }
+  // Modelo de objetos: el elegido si está instalado; si no, el primero que lo esté.
+  ctx.mpMissing = errors.filter((r) => r.asset.id.startsWith('mp-')).map((r) => r.asset.path);
+  const objVariants = Object.keys(OBJECT_MODELS);
+  ui.markUnavailableOptions('objects.model', objVariants.filter((v) => !objectModelUsable(ctx, v)));
+  ctx.objVariant = settings.get('objects.model');
+  if (!OBJECT_MODELS[ctx.objVariant]) ctx.objVariant = 'efficientdet_lite0';
+  if (!objectModelUsable(ctx, ctx.objVariant)) {
+    const alt = objVariants.find((v) => objectModelUsable(ctx, v));
+    if (alt) {
+      ctx.notices.push(`El modelo de objetos «${OBJECT_MODELS[ctx.objVariant].label}» no está disponible; se usa «${OBJECT_MODELS[alt].label}».`);
+      ctx.objVariant = alt;
+    }
+  }
+  if (settings.get('objects.model') !== ctx.objVariant) settings.set('objects.model', ctx.objVariant);
+  const objEngine = OBJECT_MODELS[ctx.objVariant].engine;
 
   // --- Detectores (versión local; los workers los sustituyen si arrancan) ----
   ctx.mp = new MediaPipeRuntime({ bundlePath: MP_BUNDLE, wasmDir: MP_WASM_DIR, simd });
-  const local = {
-    pose: new PoseDetector(ctx.mp),
-    hands: new HandDetector(ctx.mp),
-    face: new FaceDetector(ctx.mp),
-    objects: new ObjectDetector(),
-    motion: new MotionDetector(),
-  };
-  for (const d of Object.values(local)) setDetector(ctx, d);
+  for (const id of ['pose', 'hands', 'face', 'objects', 'classifier']) setDetector(ctx, newLocalDetector(ctx, id));
+  setDetector(ctx, new MotionDetector());
   ctx.delegates = delegateOrder(settings.get('perf.mpDelegate'), gpu);
 
   // --- 4) MediaPipe ---------------------------------------------------------------
-  const mpIds = ['pose', 'hands', 'face'];
+  const mpIds = ['pose', 'hands', 'face', ...(objEngine === 'mediapipe' ? ['objects'] : []), 'classifier'];
   for (const id of mpIds) {
-    const missing = blockedBy(id);
+    const missing = id === 'objects' ? objectModelMissing(ctx, ctx.objVariant) : blockedBy(id);
     if (missing.length) ctx.det[id].setStatus('missing', `Faltan: ${missing.join(', ')}`);
   }
   let mpFilesOk = false;
@@ -163,13 +175,15 @@ async function bootModels(ctx) {
     if (d.ready && d.delegate && d.delegate !== ctx.delegates[0]) ctx.notices.push(`${LABELS[id]}: delegado ${ctx.delegates[0]} no disponible, se usa ${d.delegate}.`);
   }
 
-  // --- 5) TensorFlow.js + COCO-SSD -------------------------------------------------
-  const objMissing = blockedBy('objects');
-  if (objMissing.length) {
-    ctx.det.objects.setStatus('missing', `Faltan: ${objMissing.join(', ')}`);
-    loading.step('objects', LABELS.objects, 'skip', ctx.det.objects.statusDetail);
-  } else {
-    await loadObjects(ctx, (state, detail) => loading.step('objects', `${LABELS.objects} · TensorFlow.js`, state, detail), (f) => loading.progressFrac('objects', f));
+  // --- 5) TensorFlow.js + COCO-SSD (modelo alternativo) ------------------------------
+  if (objEngine === 'tfjs') {
+    const objMissing = objectModelMissing(ctx, ctx.objVariant);
+    if (objMissing.length) {
+      ctx.det.objects.setStatus('missing', `Faltan: ${objMissing.join(', ')}`);
+      loading.step('objects', LABELS.objects, 'skip', ctx.det.objects.statusDetail);
+    } else {
+      await loadObjects(ctx, (state, detail) => loading.step('objects', `${LABELS.objects} · TensorFlow.js`, state, detail), (f) => loading.progressFrac('objects', f));
+    }
   }
 
   // --- Módulo E (sin modelo) ------------------------------------------------------
@@ -206,41 +220,80 @@ function setDetector(ctx, d) {
   if (prev && prev !== d) prev.dispose();
   ctx.det[d.id] = d;
   ctx.engine.addDetector(d);
-  if (d.id === 'objects') {
-    d.minScore = ctx.settings.get('objects.minScore');
-    d.maxResults = ctx.settings.get('objects.maxResults');
+}
+
+/** Detector local (hilo principal) de un módulo de MediaPipe o de objetos. */
+function newLocalDetector(ctx, id) {
+  switch (id) {
+    case 'pose': return new PoseDetector(ctx.mp);
+    case 'hands': return new HandDetector(ctx.mp);
+    case 'face': return new FaceDetector(ctx.mp);
+    case 'classifier': return new ClassifierDetector(ctx.mp);
+    case 'objects': {
+      if (OBJECT_MODELS[ctx.objVariant].engine === 'tfjs') return new ObjectDetector();
+      const d = new EfficientDetDetector(ctx.mp);
+      d.name = `Objetos (${OBJECT_MODELS[ctx.objVariant].label})`;
+      return d;
+    }
+    default: throw new Error(`módulo desconocido: ${id}`);
   }
+}
+
+/** ¿Están todos los archivos del modelo de objetos `v` (y su runtime)? */
+function objectModelUsable(ctx, v) {
+  return objectModelMissing(ctx, v).length === 0;
+}
+
+function objectModelMissing(ctx, v) {
+  const m = OBJECT_MODELS[v];
+  const files = m.files.filter((p) => !ctx.fileOk(p));
+  return m.engine === 'mediapipe' ? [...ctx.mpMissing, ...files] : files;
+}
+
+/** Ruta del modelo de cada módulo de MediaPipe. */
+function mpModelPath(ctx, id) {
+  if (id === 'pose') return POSE_VARIANTS[ctx.settings.get('pose.variant')];
+  if (id === 'hands') return 'models/hands/hand_landmarker.task';
+  if (id === 'face') return 'models/face/face_landmarker.task';
+  if (id === 'objects') return OBJECT_MODELS[ctx.objVariant].path;
+  return CLASSIFIER_MODEL;
 }
 
 function mpOptions(ctx, id) {
   const S = ctx.settings;
   if (id === 'pose') return { numPoses: S.get('pose.numPoses'), variant: S.get('pose.variant') };
   if (id === 'hands') return { numHands: S.get('hands.numHands') };
-  return { numFaces: S.get('face.numFaces') };
+  if (id === 'face') return { numFaces: S.get('face.numFaces') };
+  if (id === 'objects') return { variant: ctx.objVariant };
+  return {};
 }
 
 /** Carga (o recarga) un modelo de MediaPipe: en worker si es posible, si no en local. */
 async function loadMediaPipeDetector(ctx, id, onState, onProgress) {
-  const { settings, delegates } = ctx;
-  const path = id === 'pose' ? POSE_VARIANTS[settings.get('pose.variant')] : id === 'hands' ? 'models/hands/hand_landmarker.task' : 'models/face/face_landmarker.task';
+  const { delegates } = ctx;
+  const path = mpModelPath(ctx, id);
   const current = ctx.det[id];
+  // Metadatos (nombre, cadencia, prioridad) del detector que corresponde AHORA
+  // (p. ej. tras cambiar COCO-SSD por EfficientDet).
+  const meta = newLocalDetector(ctx, id);
   current.setStatus('loading');
   let model;
   try {
     onState('run', `leyendo ${path}`);
     model = await fetchWithProgress(path, onProgress || (() => {}));
-    assertMagic(model, 'zip', path);
+    assertMagic(model, path.endsWith('.tflite') ? 'tflite' : 'zip', path);
   } catch (e) {
     current.setStatus('error', e.message);
     onState('error', e.message);
     return;
   }
   if (ctx.useWorkers) {
-    const wd = new WorkerDetector({ id, letter: current.letter, name: current.name, cadence: current.cadence, priority: current.priority });
+    const wd = new WorkerDetector({ id, letter: meta.letter, name: meta.name, cadence: meta.cadence, priority: meta.priority });
     try {
       onState('run', `inicializando en Web Worker (delegado ${delegates.join(' → ')})…`);
       await wd.start({ kind: 'mediapipe', task: id, bundleUrl: abs(MP_BUNDLE), wasmDir: abs(MP_WASM_DIR), simd: ctx.simd, model: model.slice(), delegates, options: mpOptions(ctx, id) });
-      if (id === 'pose') wd.variant = settings.get('pose.variant');
+      if (id === 'pose') wd.variant = ctx.settings.get('pose.variant');
+      if (id === 'objects') wd.variant = ctx.objVariant;
       setDetector(ctx, wd);
       onState('ok', `${path} · ${wd.backend}`);
       ctx.engine.refreshConnections();
@@ -253,8 +306,7 @@ async function loadMediaPipeDetector(ctx, id, onState, onProgress) {
   // Respaldo: hilo principal.
   try {
     if (!ctx.mp.vision) await ctx.mp.load();
-    const det = !ctx.det[id].isWorker ? ctx.det[id]
-      : id === 'pose' ? new PoseDetector(ctx.mp) : id === 'hands' ? new HandDetector(ctx.mp) : new FaceDetector(ctx.mp);
+    const det = !ctx.det[id].isWorker && ctx.det[id].constructor === meta.constructor ? ctx.det[id] : meta;
     onState('run', `inicializando (delegado ${delegates.join(' → ')})…`);
     await det.load({ model, delegates, ...mpOptions(ctx, id) });
     setDetector(ctx, det);
@@ -306,7 +358,7 @@ async function loadObjects(ctx, onState, onProgress) {
   };
 
   if (ctx.useWorkers) {
-    const cur = ctx.det.objects;
+    const cur = new ObjectDetector();
     const wd = new WorkerDetector({ id: 'objects', letter: cur.letter, name: cur.name, cadence: cur.cadence, priority: cur.priority });
     try {
       onState('run', `Web Worker · backends a probar: ${order.join(' → ')}`);
@@ -343,7 +395,7 @@ async function loadObjects(ctx, onState, onProgress) {
     if (!tf || !tf.loadGraphModel) throw new Error('TF.js no se inicializó correctamente');
     if (tf.wasm && tf.wasm.setWasmPaths) tf.wasm.setWasmPaths(await tfWasmPaths());
     ctx.engine.tf = tf;
-    const det = ctx.det.objects.isWorker ? new ObjectDetector() : ctx.det.objects;
+    const det = ctx.det.objects instanceof ObjectDetector ? ctx.det.objects : new ObjectDetector();
     setDetector(ctx, det);
     det.setStatus('loading');
     let start = 0, lastErr = null;
@@ -388,12 +440,20 @@ async function tfWasmPaths() {
 
 function updateBackendHeader(ctx) {
   const { det, ui, gpu } = ctx;
-  const mpDet = ['pose', 'hands', 'face'].map((id) => det[id]).find((d) => d.ready);
-  const tfName = det.objects.ready ? (det.objects.tfBackend ? backendLabel(det.objects.tfBackend) : det.objects.backend) : '—';
+  const tfjs = OBJECT_MODELS[ctx.objVariant].engine === 'tfjs';
+  const mpIds = ['pose', 'hands', 'face', 'classifier', ...(tfjs ? [] : ['objects'])];
+  const mpDet = mpIds.map((id) => det[id]).find((d) => d && d.ready);
   const mpTxt = mpDet ? (mpDet.delegate === 'GPU' ? 'GPU' : 'CPU') : '—';
   const workers = Object.values(det).some((d) => d.isWorker);
-  const title = `TensorFlow.js (objetos): ${det.objects.ready ? det.objects.backend : 'no disponible'}\nMediaPipe (pose/manos/rostro): ${mpDet ? mpDet.backend : 'no disponible'}\nGPU: ${gpu.renderer || 'sin WebGL2'}${gpu.software ? ' (por software)' : ''}`;
-  ui.setBackendInfo(`TF.js ${tfName} · MP ${mpTxt}${workers ? ' · workers' : ''}`, title);
+  const lines = [`MediaPipe (pose, manos, rostro, reconocimiento${tfjs ? '' : ', objetos'}): ${mpDet ? mpDet.backend : 'no disponible'}`];
+  let text = `MP ${mpTxt}`;
+  if (tfjs) {
+    const tfName = det.objects.ready ? (det.objects.tfBackend ? backendLabel(det.objects.tfBackend) : det.objects.backend) : '—';
+    lines.push(`TensorFlow.js (objetos COCO-SSD): ${det.objects.ready ? det.objects.backend : 'no disponible'}`);
+    text += ` · TF.js ${tfName}`;
+  }
+  lines.push(`GPU: ${gpu.renderer || 'sin WebGL2'}${gpu.software ? ' (por software)' : ''}`);
+  ui.setBackendInfo(`${text}${workers ? ' · workers' : ''}`, lines.join('\n'));
 }
 
 /** Opciones que reconfiguran un modelo ya cargado (sin recargar la página). */
@@ -414,6 +474,16 @@ function hookTaskOptions(ctx) {
           return;
         }
         await reloadDetector(ctx, 'pose');
+      } else if (key === 'objects.model') {
+        if (value === ctx.objVariant && det.objects.ready) return;
+        if (!OBJECT_MODELS[value] || !objectModelUsable(ctx, value)) {
+          const label = OBJECT_MODELS[value] ? OBJECT_MODELS[value].label : value;
+          ui.toast(`El modelo «${label}» no está instalado (${objectModelMissing(ctx, value).join(', ')}). Descárgalo (ver README) y recarga.`, 'error');
+          settings.set('objects.model', ctx.objVariant);
+          return;
+        }
+        ctx.objVariant = value;
+        await reloadDetector(ctx, 'objects');
       } else return;
       log.add('system', 'sistema', `Ajuste aplicado: ${key} = ${value}`);
     } catch (e) {
@@ -429,8 +499,11 @@ async function reloadDetector(ctx, id) {
   if (!d0) return;
   d0.consecutiveErrors = 0;
   ui.toast(`Recargando ${LABELS[id]}…`);
-  if (id === 'objects') await loadObjects(ctx, () => {}, () => {});
-  else if (id === 'motion') await loadMotion(ctx);
+  if (id === 'objects') {
+    engine.clearModule('objects'); // otro modelo: las pistas anteriores no valen
+    if (OBJECT_MODELS[ctx.objVariant].engine === 'tfjs') await loadObjects(ctx, () => {}, () => {});
+    else await loadMediaPipeDetector(ctx, 'objects', () => {}, null);
+  } else if (id === 'motion') await loadMotion(ctx);
   else await loadMediaPipeDetector(ctx, id, () => {}, null);
   for (const n of ctx.notices.splice(0)) { log.add('warn', 'sistema', n); ui.toast(n, 'warn'); }
   updateBackendHeader(ctx);
