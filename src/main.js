@@ -25,7 +25,7 @@ import { ZoneManager } from './analytics/ZoneManager.js';
 import { VideoSource } from './core/VideoSource.js';
 import { Renderer } from './core/Renderer.js';
 import { Engine } from './core/Engine.js';
-import { checkAll, fetchWithProgress, loadClassicScript, assertMagic } from './core/AssetChecker.js';
+import { checkAll, fetchWithProgress, loadClassicScript, assertMagic, portable } from './core/AssetChecker.js';
 import { detectGpu, wasmSimdSupported, tfBackendOrder, activateTfBackend } from './core/BackendManager.js';
 import { MediaPipeRuntime, delegateOrder } from './detectors/MediaPipeRuntime.js';
 import { PoseDetector } from './detectors/PoseDetector.js';
@@ -89,8 +89,8 @@ async function bootModels(ctx) {
   const canWorkers = typeof Worker !== 'undefined' && typeof createImageBitmap === 'function' && typeof OffscreenCanvas !== 'undefined';
   ctx.simd = simd;
   ctx.gpu = gpu;
-  ctx.useWorkers = canWorkers && settings.get('perf.workers');
-  const sys = `GPU: ${gpu.renderer || 'sin WebGL2'}${gpu.software ? ' (por software)' : ''} · WebGPU: ${gpu.webgpu ? 'sí' : 'no'} · WASM SIMD: ${simd ? 'sí' : 'no'} · workers: ${ctx.useWorkers ? 'sí' : canWorkers ? 'desactivados' : 'no disponibles'} · núcleos: ${navigator.hardwareConcurrency || '?'}`;
+  ctx.useWorkers = canWorkers && settings.get('perf.workers') && !portable();
+  const sys = `${portable() ? 'MODO PORTABLE (un solo HTML) · ' : ''}GPU: ${gpu.renderer || 'sin WebGL2'}${gpu.software ? ' (por software)' : ''} · WebGPU: ${gpu.webgpu ? 'sí' : 'no'} · WASM SIMD: ${simd ? 'sí' : 'no'} · workers: ${ctx.useWorkers ? 'sí' : portable() ? 'no (modo portable)' : canWorkers ? 'desactivados' : 'no disponibles'} · núcleos: ${navigator.hardwareConcurrency || '?'}`;
   ui.setSystemInfo(sys);
   log.add('system', 'sistema', sys);
   if (gpu.software) log.add('warn', 'sistema', 'GPU por software detectada: en modo automático se usan los backends de CPU (WASM), más rápidos en este caso.');
@@ -341,7 +341,7 @@ async function loadObjects(ctx, onState, onProgress) {
     }
     const tf = window.tf;
     if (!tf || !tf.loadGraphModel) throw new Error('TF.js no se inicializó correctamente');
-    if (tf.wasm && tf.wasm.setWasmPaths) tf.wasm.setWasmPaths(abs('lib/tfjs/'));
+    if (tf.wasm && tf.wasm.setWasmPaths) tf.wasm.setWasmPaths(await tfWasmPaths());
     ctx.engine.tf = tf;
     const det = ctx.det.objects.isWorker ? new ObjectDetector() : ctx.det.objects;
     setDetector(ctx, det);
@@ -368,6 +368,22 @@ async function loadObjects(ctx, onState, onProgress) {
     ctx.det.objects.setStatus('error', e.message);
     onState('error', e.message);
   }
+}
+
+/**
+ * Rutas de los binarios WASM de TF.js. En modo portable se pasan como blobs
+ * (setWasmPaths exige las tres entradas; la multihilo nunca se usa sin
+ * aislamiento entre orígenes, así que apunta a la SIMD).
+ */
+async function tfWasmPaths() {
+  const P = portable();
+  if (!P) return abs('lib/tfjs/');
+  const map = {};
+  for (const f of ['tfjs-backend-wasm.wasm', 'tfjs-backend-wasm-simd.wasm', 'tfjs-backend-wasm-threaded-simd.wasm']) {
+    if (P.has(`lib/tfjs/${f}`)) map[f] = await P.blobUrl(`lib/tfjs/${f}`, 'application/wasm');
+  }
+  if (!map['tfjs-backend-wasm-threaded-simd.wasm']) map['tfjs-backend-wasm-threaded-simd.wasm'] = map['tfjs-backend-wasm-simd.wasm'];
+  return map;
 }
 
 function updateBackendHeader(ctx) {

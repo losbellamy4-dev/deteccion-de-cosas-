@@ -15,3 +15,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
+
+# HTML portable generado por tools/construir_portable.py (≈ 50 MB)
+dist/

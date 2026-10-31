@@ -184,16 +184,25 @@ export async function fetchWithProgress(path, onProgress) {
   return out;
 }
 
+/**
+ * Modo portable: un único HTML con librerías y modelos incrustados (lo genera
+ * tools/construir_portable.py). Expone `has(ruta)` y `blobUrl(ruta, tipo)`;
+ * fuera de ese modo es null y todo se carga desde archivos.
+ */
+export const portable = () => globalThis.__DETECTALO_PORTABLE__ || null;
+
 /** URL base para resolver rutas relativas (documento o, dentro de un worker, el script). */
 export function baseUrl() {
   return typeof document !== 'undefined' ? document.baseURI : self.location.href;
 }
 
 /** Inserta un <script> clásico local (para los bundles UMD de TF.js). */
-export function loadClassicScript(path) {
+export async function loadClassicScript(path) {
+  const P = portable();
+  const src = P && P.has(path) ? await P.blobUrl(path, 'text/javascript') : path;
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = path;
+    s.src = src;
     s.async = false;
     s.onload = () => resolve();
     s.onerror = () => reject(new AssetError(`No se pudo cargar el script «${path}»`, { path }));
@@ -207,6 +216,8 @@ export function loadClassicScript(path) {
  * cargándolo desde un Blob con el tipo correcto. Sigue siendo 100 % local.
  */
 export async function importModule(path) {
+  const P = portable();
+  if (P && P.has(path)) return import(await P.blobUrl(path, 'text/javascript'));
   const abs = new URL(path, baseUrl()).href;
   try {
     return await import(abs);

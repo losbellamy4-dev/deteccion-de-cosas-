@@ -17,7 +17,7 @@
  * Versión fijada: 0.10.35. Las versiones 1.x del paquete incluyen un módulo
  * de telemetría que envía datos a un servidor externo; por eso no se usan.
  */
-import { importModule, baseUrl } from '../core/AssetChecker.js';
+import { importModule, baseUrl, portable } from '../core/AssetChecker.js';
 
 export class MediaPipeRuntime {
   constructor({ bundlePath, wasmDir, simd }) {
@@ -31,10 +31,13 @@ export class MediaPipeRuntime {
   async load() {
     this.vision = await importModule(this.bundlePath);
     const base = this.simd ? 'vision_wasm_internal' : 'vision_wasm_nosimd_internal';
-    this.fileset = {
-      wasmLoaderPath: new URL(`${this.wasmDir}/${base}.js`, baseUrl()).href,
-      wasmBinaryPath: new URL(`${this.wasmDir}/${base}.wasm`, baseUrl()).href,
-    };
+    const js = `${this.wasmDir}/${base}.js`, wasm = `${this.wasmDir}/${base}.wasm`;
+    const P = portable();
+    // En modo portable el cargador y el binario se sirven como blobs: Emscripten
+    // no puede leer URLs file:// y el navegador bloquea fetch() sobre file://.
+    this.fileset = P && P.has(js)
+      ? { wasmLoaderPath: await P.blobUrl(js, 'text/javascript'), wasmBinaryPath: await P.blobUrl(wasm, 'application/wasm') }
+      : { wasmLoaderPath: new URL(js, baseUrl()).href, wasmBinaryPath: new URL(wasm, baseUrl()).href };
     return this.vision;
   }
 

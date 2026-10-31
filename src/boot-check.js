@@ -21,7 +21,7 @@
   var CMD = '<p><code>cd ruta/a/la/carpeta</code><br><code>python -m http.server 8000</code> (o <code>python serve.py</code>)</p>' +
     '<p>y abre en el navegador <code>localhost:8000</code></p>';
 
-  if (location.protocol === 'file:') {
+  if (location.protocol === 'file:' && !window.__DETECTALO_PORTABLE__) {
     fatal('Abre la app desde un servidor local',
       '<p>Has abierto <code>index.html</code> directamente (file://). El navegador bloquea así la carga de los modelos, los módulos JavaScript y WebGL.</p>' +
       '<p>En una terminal, dentro de la carpeta del proyecto:</p>' + CMD);

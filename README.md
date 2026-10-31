@@ -40,6 +40,16 @@ python -m http.server 8000          # o bien: python serve.py  (recomendado en W
 
 A partir del paso 3 puedes desconectar la red. Si prefieres no usar el script, descarga a mano los archivos de la [sección 3](#3-archivos-a-descargar-lista-exacta) y colócalos en las rutas indicadas.
 
+### Versión portable: un solo HTML con doble clic
+
+Si no quieres usar servidor ni terminal, genera un único archivo con todo dentro (≈ 45 MB):
+
+```bash
+python tools/construir_portable.py
+```
+
+El resultado, `dist/detectalo-todo-portable.html`, se abre con **doble clic** en Chrome o Edge y funciona sin servidor y sin conexión (tarda unos segundos en arrancar). Lleva incrustados las librerías y los modelos imprescindibles; su CSP sólo permite datos `data:`/`blob:`, así que tampoco puede conectarse a ninguna red. Diferencia: en este modo los modelos se ejecutan en el hilo principal (sin Web Workers), así que en equipos sin GPU va menos fluido que la versión con servidor; si notas tirones, desactiva los módulos que no uses.
+
 ---
 
 ## 2. Sección 0 — cómo se cumple "local y offline"
@@ -156,6 +166,7 @@ src/
 tools/
   descargar_dependencias.py   descarga única con verificación SHA-256
   verificar_offline.py        sin dominios externos en el código + archivos presentes
+  construir_portable.py       genera el HTML portable (todo incrustado, doble clic)
 serve.py                   servidor local opcional (MIME, CSP en cabecera, sólo localhost)
 tests/                     pruebas unitarias (node --test) con landmarks reales de MediaPipe
 ```
